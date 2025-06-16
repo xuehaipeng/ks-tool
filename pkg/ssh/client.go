@@ -90,6 +90,65 @@ func shellQuote(command string) string {
 	return fmt.Sprintf("'%s'", escaped)
 }
 
+// CopyPath copies a local file or directory to the remote host
+// If localPath is a directory, it will be copied recursively
+func (c *Client) CopyPath(localPath, remotePath string) error {
+	// Get file info to determine if it's a file or directory
+	fileInfo, err := os.Stat(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to stat local path %s: %v", localPath, err)
+	}
+
+	if fileInfo.IsDir() {
+		return c.copyDirectory(localPath, remotePath)
+	} else {
+		return c.CopyFile(localPath, remotePath)
+	}
+}
+
+// copyDirectory recursively copies a directory to the remote host
+func (c *Client) copyDirectory(localDir, remoteDir string) error {
+	klog.V(2).Infof("Copying directory to %s: %s -> %s", c.host.IP, localDir, remoteDir)
+
+	// Create the remote directory first
+	if err := c.createRemoteDir(remoteDir); err != nil {
+		return fmt.Errorf("failed to create remote directory %s: %v", remoteDir, err)
+	}
+
+	// Walk through the local directory
+	return filepath.Walk(localDir, func(localPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Calculate relative path from the source directory
+		relPath, err := filepath.Rel(localDir, localPath)
+		if err != nil {
+			return fmt.Errorf("failed to get relative path: %v", err)
+		}
+
+		// Skip the root directory itself
+		if relPath == "." {
+			return nil
+		}
+
+		// Construct remote path
+		remotePath := filepath.Join(remoteDir, relPath)
+		// Convert to forward slashes for remote Unix systems
+		remotePath = strings.ReplaceAll(remotePath, "\\", "/")
+
+		if info.IsDir() {
+			// Create remote directory
+			klog.V(3).Infof("Creating remote directory: %s", remotePath)
+			return c.createRemoteDir(remotePath)
+		} else {
+			// Copy file
+			klog.V(3).Infof("Copying file: %s -> %s", localPath, remotePath)
+			return c.CopyFile(localPath, remotePath)
+		}
+	})
+}
+
 // CopyFile copies a local file to the remote host
 func (c *Client) CopyFile(localPath, remotePath string) error {
 	// Open local file

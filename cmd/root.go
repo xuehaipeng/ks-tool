@@ -3,7 +3,6 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 	"github.com/xuehaipeng/ks-tool/pkg/version"
-	"k8s.io/klog/v2"
 )
 
 var (
@@ -21,7 +20,8 @@ func NewRootCmd() *cobra.Command {
 - Manage groups of hosts with different configurations`,
 		Version: version.GetShortVersion(),
 		Run: func(cmd *cobra.Command, args []string) {
-			klog.Info("Use 'ks --help' for more information")
+			// Show help when no arguments are provided
+			cmd.Help()
 		},
 	}
 

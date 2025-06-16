@@ -22,21 +22,29 @@ func NewScpCmd() *cobra.Command {
 		pass       string
 		port       int
 		sudoPass   string
+		recursive  bool
 	)
 
 	scpCmd := &cobra.Command{
-		Use:   "scp [local-file]",
-		Short: "Copy files to remote hosts via SCP",
-		Long: `Copy a local file to one or more groups of remote hosts or individual hosts via SCP as root user.
+		Use:   "scp [local-file-or-directory]",
+		Short: "Copy files or directories to remote hosts via SCP",
+		Long: `Copy a local file or directory to one or more groups of remote hosts or individual hosts via SCP as root user.
 
 You can specify either groups from your hosts.yaml file or individual hosts with connection details.
+Use the --recursive flag to copy directories and their contents recursively.
 
 Examples:
-  # Copy to groups
+  # Copy file to groups
   ks scp script.sh --groups web-servers,db-servers --remote-path /tmp/script.sh
+  
+  # Copy directory recursively to groups
+  ks scp ./config-dir --groups web-servers --remote-path /etc/myapp --recursive
   
   # Copy to individual hosts
   ks scp config.conf --hosts 192.168.1.10,192.168.1.11 --user root --pass password123 --remote-path /etc/config.conf
+  
+  # Copy directory to individual hosts
+  ks scp ./deploy --hosts 192.168.1.10 --user admin --remote-path /opt/deploy --recursive
   
   # Mix of groups and individual hosts
   ks scp deploy.sh --groups web-servers --hosts 192.168.1.20 --user admin --pass secret --remote-path /tmp/deploy.sh`,
@@ -80,37 +88,38 @@ Examples:
 				return fmt.Errorf("no hosts specified: use --groups or --hosts")
 			}
 
-			// Copy file to all hosts
-			return copyFileToHosts(allHosts, localPath, remotePath)
+			// Copy file/directory to all hosts
+			return copyPathToHosts(allHosts, localPath, remotePath, recursive)
 		},
 	}
 
-	scpCmd.Flags().StringSliceVarP(&groups, "groups", "g", []string{}, "Host groups to copy file to")
-	scpCmd.Flags().StringSliceVarP(&hostList, "hosts", "H", []string{}, "Individual hosts to copy file to (IP addresses)")
-	scpCmd.Flags().StringVarP(&remotePath, "remote-path", "r", "", "Remote path to copy file to (required)")
+	scpCmd.Flags().StringSliceVarP(&groups, "groups", "g", []string{}, "Host groups to copy file/directory to")
+	scpCmd.Flags().StringSliceVarP(&hostList, "hosts", "H", []string{}, "Individual hosts to copy file/directory to (IP addresses)")
+	scpCmd.Flags().StringVarP(&remotePath, "remote-path", "r", "", "Remote path to copy file/directory to (required)")
 	scpCmd.Flags().StringVarP(&user, "user", "u", "", "Username for ad-hoc hosts (will lookup from config if not provided)")
 	scpCmd.Flags().StringVarP(&pass, "pass", "p", "", "Password for ad-hoc hosts (will lookup from config if not provided)")
 	scpCmd.Flags().IntVar(&port, "port", 22, "SSH port for ad-hoc hosts")
 	scpCmd.Flags().StringVar(&sudoPass, "sudo-pass", "", "Sudo password for ad-hoc hosts (will lookup from config if not provided)")
+	scpCmd.Flags().BoolVar(&recursive, "recursive", true, "Copy directories recursively")
 	scpCmd.MarkFlagRequired("remote-path")
 
 	return scpCmd
 }
 
-// copyFileToHosts copies a file to multiple hosts
-func copyFileToHosts(hosts []config.Host, localPath, remotePath string) error {
+// copyPathToHosts copies a file or directory to multiple hosts
+func copyPathToHosts(hosts []config.Host, localPath, remotePath string, recursive bool) error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	errors := make([]string, 0)
 
-	klog.Infof("Copying file to %d hosts", len(hosts))
+	klog.Infof("Copying %s to %d hosts", localPath, len(hosts))
 
 	for _, host := range hosts {
 		wg.Add(1)
 		go func(h config.Host) {
 			defer wg.Done()
 
-			if err := copyFileToHost(h, localPath, remotePath); err != nil {
+			if err := copyPathToHost(h, localPath, remotePath, recursive); err != nil {
 				mu.Lock()
 				errors = append(errors, fmt.Sprintf("Host %s: %v", h.IP, err))
 				mu.Unlock()
@@ -121,14 +130,14 @@ func copyFileToHosts(hosts []config.Host, localPath, remotePath string) error {
 	wg.Wait()
 
 	if len(errors) > 0 {
-		return fmt.Errorf("file copy failed on some hosts:\n%s", strings.Join(errors, "\n"))
+		return fmt.Errorf("copy failed on some hosts:\n%s", strings.Join(errors, "\n"))
 	}
 
 	return nil
 }
 
-// copyFileToHost copies a file to a single host
-func copyFileToHost(host config.Host, localPath, remotePath string) error {
+// copyPathToHost copies a file or directory to a single host
+func copyPathToHost(host config.Host, localPath, remotePath string, recursive bool) error {
 	klog.Infof("Connecting to host: %s", host.IP)
 
 	client, err := ssh.NewClient(host)
@@ -137,12 +146,19 @@ func copyFileToHost(host config.Host, localPath, remotePath string) error {
 	}
 	defer client.Close()
 
-	if err := client.CopyFile(localPath, remotePath); err != nil {
-		klog.Errorf("File copy failed on %s: %v", host.IP, err)
-		return err
+	if recursive {
+		if err := client.CopyPath(localPath, remotePath); err != nil {
+			klog.Errorf("Path copy failed on %s: %v", host.IP, err)
+			return err
+		}
+	} else {
+		if err := client.CopyFile(localPath, remotePath); err != nil {
+			klog.Errorf("File copy failed on %s: %v", host.IP, err)
+			return err
+		}
 	}
 
-	klog.Infof("File copy succeeded on %s: %s -> %s", host.IP, localPath, remotePath)
+	klog.Infof("Copy succeeded on %s: %s -> %s", host.IP, localPath, remotePath)
 	fmt.Printf("Successfully copied %s to %s:%s\n", localPath, host.IP, remotePath)
 
 	return nil

@@ -120,16 +120,22 @@ Execute a command on specific host groups. Supports complex shell operations inc
 ./ks exec "uptime" --groups web-servers --config my-hosts.yaml
 ```
 
-### Copy Files
+### Copy Files and Directories
 
-Copy files to remote hosts via SCP:
+Copy files or directories to remote hosts via SCP:
 
 ```bash
 # Copy file to web-servers group
 ./ks scp /local/path/to/file.txt --groups web-servers --remote-path /remote/path/file.txt
 
+# Copy directory recursively to groups
+./ks scp ./config-dir --groups web-servers --remote-path /etc/myapp --recursive
+
 # Copy to multiple groups
 ./ks scp script.sh --groups web-servers,app-servers --remote-path /tmp/script.sh
+
+# Copy directory to individual hosts
+./ks scp ./deploy --hosts 192.168.1.10 --user admin --remote-path /opt/deploy --recursive
 ```
 
 ### Extract Ansible Inventory
@@ -161,8 +167,9 @@ Exec command options:
 - `--groups, -g`: Host groups to execute command on (required)
 
 SCP command options:
-- `--groups, -g`: Host groups to copy file to (required)
-- `--remote-path, -r`: Remote path to copy file to (required)
+- `--groups, -g`: Host groups to copy file/directory to (required)
+- `--remote-path, -r`: Remote path to copy file/directory to (required)
+- `--recursive`: Copy directories recursively
 
 Extract command options:
 - `--input, -i`: Path to the Ansible inventory file (required)
@@ -200,6 +207,9 @@ The tool uses klog for logging. You can control log verbosity:
 
 # Deploy a script to app servers
 ./ks scp deploy.sh --groups app-servers --remote-path /tmp/deploy.sh
+
+# Deploy entire directory structure
+./ks scp ./deployment-configs --groups app-servers --remote-path /opt/configs --recursive
 
 # Execute the deployed script with pipeline
 ./ks exec "chmod +x /tmp/deploy.sh && /tmp/deploy.sh | tee /tmp/deploy.log" --groups app-servers
