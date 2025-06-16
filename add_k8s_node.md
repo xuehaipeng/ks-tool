@@ -1,5 +1,19 @@
 # Adding Kubernetes Nodes with ks Tool
 
+## Background
+
+This guide serves as a supplementary manual to the [kubeasz](https://github.com/easzlab/kubeasz) project, which provides automated Kubernetes cluster deployment using Ansible scripts. While kubeasz is an excellent tool for quickly deploying high-availability Kubernetes clusters, it currently supports only amd64 and arm64 architectures.
+
+This manual operation guide fills the gap by providing step-by-step instructions for adding Kubernetes nodes to clusters that kubeasz might not support, such as:
+- Alternative CPU architectures (e.g., LoongArch64, RISC-V, etc.)
+- Custom Linux distributions not covered by kubeasz
+- Environments where Ansible automation is not feasible
+- Situations requiring manual control over the installation process
+
+The guide leverages the `ks` tool for efficient remote operations, providing a middle ground between fully automated deployment and completely manual installation.
+
+## Overview
+
 This guide describes how to add new nodes to an existing Kubernetes cluster using the `ks` tool. The process involves installing containerd as the container runtime, deploying Kubernetes binaries, generating certificates, and configuring services.
 
 ## Prerequisites
