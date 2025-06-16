@@ -6,6 +6,7 @@ A command-line tool for executing commands and copying files to groups of remote
 
 - Execute shell commands on multiple remote hosts as root user
 - Copy files to multiple remote hosts via SCP as root user
+- Extract SSH information from Ansible inventory files and convert to hosts.yaml format
 - Organize hosts into groups for easy management
 - Support for different SSH configurations per host (username, password, sudo password, port)
 - Concurrent execution for better performance
@@ -21,23 +22,30 @@ go build -o ks-tool
 
 ## Configuration
 
-Create a `hosts.yaml` file to define your host groups:
+Create a `hosts.yaml` file to define your host groups. The tool supports two configuration formats:
+
+### Group-Level Credentials (Recommended)
+
+For groups where hosts share the same credentials:
 
 ```yaml
 groups:
   - name: web-servers
     hosts:
       - ip: 192.168.1.10
-        username: admin
-        password: password123
-        sudo_password: sudopass123
-        port: 22
       - ip: 192.168.1.11
-        username: admin
-        password: password123
-        sudo_password: sudopass123
-        port: 22
-  
+    username: admin
+    password: password123
+    sudo_password: sudopass123
+    port: 22
+```
+
+### Individual Host Credentials
+
+For groups where each host has different credentials:
+
+```yaml
+groups:
   - name: database-servers
     hosts:
       - ip: 192.168.1.20
@@ -45,15 +53,48 @@ groups:
         password: dbpass123
         sudo_password: dbsudo123
         port: 22
+      - ip: 192.168.1.21
+        username: dbadmin2
+        password: dbpass456
+        sudo_password: dbsudo456
+        port: 2222
+```
+
+### Mixed Configuration
+
+You can also mix both approaches - define group-level defaults and override them for specific hosts:
+
+```yaml
+groups:
+  - name: mixed-servers
+    hosts:
+      - ip: 192.168.1.30
+        # This host inherits all group credentials
+      - ip: 192.168.1.31
+        # This host overrides only the sudo password
+        sudo_password: different_sudo_pass
+    username: mixeduser
+    password: mixedpass123
+    sudo_password: mixedsudo123
+    port: 22
 ```
 
 ### Configuration Fields
 
-- `ip`: IP address of the remote host
-- `username`: SSH username
-- `password`: SSH password
-- `sudo_password`: Password for sudo commands (optional)
-- `port`: SSH port (default: 22)
+**Group Level:**
+- `name`: Group name (required)
+- `hosts`: List of hosts in the group (required)
+- `username`: Default SSH username for all hosts in group
+- `password`: Default SSH password for all hosts in group
+- `sudo_password`: Default sudo password for all hosts in group (optional)
+- `port`: Default SSH port for all hosts in group (default: 22)
+
+**Host Level:**
+- `ip`: IP address of the remote host (required)
+- `username`: SSH username (overrides group username if specified)
+- `password`: SSH password (overrides group password if specified)
+- `sudo_password`: Sudo password (overrides group sudo_password if specified)
+- `port`: SSH port (overrides group port if specified, default: 22)
 
 ## Usage
 
@@ -84,6 +125,25 @@ Copy files to remote hosts via SCP:
 ./ks-tool scp script.sh --groups web-servers,app-servers --remote-path /tmp/script.sh
 ```
 
+### Extract Ansible Inventory
+
+Convert Ansible inventory files to hosts.yaml format:
+
+```bash
+# Extract SSH information from Ansible inventory
+./ks-tool extract -i /path/to/ansible/inventory -o hosts.yaml
+
+# Extract to custom output file
+./ks-tool extract --input inventory.ini --output my-hosts.yaml
+```
+
+The extract command will:
+- Parse all host groups from the Ansible inventory
+- Extract SSH configuration from `[all:vars]` section
+- Handle host-specific SSH parameters (port, username, password)
+- Skip special Ansible groups (add_*, del_*)
+- Generate a hosts.yaml file compatible with ks-tool
+
 ### Command Line Options
 
 Global options:
@@ -96,6 +156,10 @@ Exec command options:
 SCP command options:
 - `--groups, -g`: Host groups to copy file to (required)
 - `--remote-path, -r`: Remote path to copy file to (required)
+
+Extract command options:
+- `--input, -i`: Path to the Ansible inventory file (required)
+- `--output, -o`: Path to the output hosts.yaml file (default: hosts.yaml)
 
 ### Logging
 
@@ -129,6 +193,12 @@ The tool uses klog for logging. You can control log verbosity:
 
 # Update package lists on multiple groups
 ./ks-tool exec "apt update" --groups web-servers,database-servers,app-servers
+
+# Convert Ansible inventory to hosts.yaml
+./ks-tool extract -i /etc/ansible/inventory -o k8s-hosts.yaml
+
+# Then use the converted hosts file for operations
+./ks-tool exec "kubectl get nodes" --groups kube_master --config k8s-hosts.yaml
 ```
 
 ## Security Notes

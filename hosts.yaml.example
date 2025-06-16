@@ -1,34 +1,50 @@
 groups:
+  # Group with shared credentials (recommended for groups with same login info)
   - name: web-servers
     hosts:
       - ip: 192.168.1.10
-        username: admin
-        password: password123
-        sudo_password: sudopass123
-        port: 22
       - ip: 192.168.1.11
-        username: admin
-        password: password123
-        sudo_password: sudopass123
-        port: 22
+    username: admin
+    password: password123
+    sudo_password: sudopass123
+    port: 22
   
+  # Group with mixed credentials (some shared, some individual)
   - name: database-servers
     hosts:
       - ip: 192.168.1.20
-        username: dbadmin
-        password: dbpass123
-        sudo_password: dbsudo123
-        port: 22
+        # This host inherits group credentials
       - ip: 192.168.1.21
-        username: dbadmin
-        password: dbpass123
-        sudo_password: dbsudo123
+        # This host overrides the group port
         port: 2222
+    username: dbadmin
+    password: dbpass123
+    sudo_password: dbsudo123
+    port: 22
   
+  # Group with individual host credentials (legacy format, still supported)
   - name: app-servers
     hosts:
       - ip: 192.168.1.30
         username: appuser
         password: apppass123
         sudo_password: appsudo123
-        port: 22 
+        port: 22
+      - ip: 192.168.1.31
+        username: appuser2
+        password: apppass456
+        sudo_password: appsudo456
+        port: 2222
+  
+  # Group with shared credentials but one host needs different sudo password
+  - name: mixed-servers
+    hosts:
+      - ip: 192.168.1.40
+        # Uses group credentials
+      - ip: 192.168.1.41
+        # Overrides only sudo password, inherits others
+        sudo_password: different_sudo_pass
+    username: mixeduser
+    password: mixedpass123
+    sudo_password: mixedsudo123
+    port: 22 
