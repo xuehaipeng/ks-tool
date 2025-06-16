@@ -17,7 +17,8 @@ func NewRootCmd() *cobra.Command {
 		Long: `ks is a command-line tool that allows you to:
 - Execute shell commands on multiple hosts
 - Copy files to multiple hosts via SCP
-- Manage groups of hosts with different configurations`,
+- Manage groups of hosts with different configurations
+- Generate kubelet certificates for Kubernetes nodes`,
 		Version: version.GetShortVersion(),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Show help when no arguments are provided
@@ -32,6 +33,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(NewExecCmd())
 	rootCmd.AddCommand(NewScpCmd())
 	rootCmd.AddCommand(NewExtractCmd())
+	rootCmd.AddCommand(NewGenCertCmd())
 	rootCmd.AddCommand(NewVersionCmd())
 
 	return rootCmd
