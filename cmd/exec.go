@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/xuehaipeng/ks-tool/pkg/config"
+	"github.com/xuehaipeng/ks-tool/pkg/hosts"
 	"github.com/xuehaipeng/ks-tool/pkg/ssh"
 	"k8s.io/klog/v2"
 )
@@ -14,61 +15,104 @@ import (
 // NewExecCmd creates a new exec command
 func NewExecCmd() *cobra.Command {
 	var (
-		groups []string
+		groups   []string
+		hostList []string
+		user     string
+		pass     string
+		port     int
+		sudoPass string
 	)
 
 	execCmd := &cobra.Command{
 		Use:   "exec [command]",
 		Short: "Execute shell command on remote hosts",
-		Long:  `Execute a shell command on one or more groups of remote hosts as root user.`,
-		Args:  cobra.ExactArgs(1),
+		Long: `Execute a shell command on one or more groups of remote hosts or individual hosts as root user.
+
+You can specify either groups from your hosts.yaml file or individual hosts with connection details.
+
+Examples:
+  # Execute on groups
+  ks exec "uptime" --groups web-servers,db-servers
+  
+  # Execute on individual hosts
+  ks exec "uptime" --hosts 192.168.1.10,192.168.1.11 --user root --pass password123
+  
+  # Mix of groups and individual hosts
+  ks exec "uptime" --groups web-servers --hosts 192.168.1.20 --user admin --pass secret`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			command := args[0]
 
-			// Load configuration
-			cfg, err := config.LoadConfig(configFile)
-			if err != nil {
-				return fmt.Errorf("failed to load config: %v", err)
+			var allHosts []config.Host
+
+			// Process groups if specified
+			if len(groups) > 0 {
+				// Load configuration
+				cfg, err := config.LoadConfig(configFile)
+				if err != nil {
+					return fmt.Errorf("failed to load config: %v", err)
+				}
+
+				// Get specified groups
+				selectedGroups, err := cfg.GetGroups(groups)
+				if err != nil {
+					return fmt.Errorf("failed to get groups: %v", err)
+				}
+
+				// Collect all hosts from groups
+				for _, group := range selectedGroups {
+					allHosts = append(allHosts, group.Hosts...)
+				}
 			}
 
-			// Get specified groups
-			selectedGroups, err := cfg.GetGroups(groups)
-			if err != nil {
-				return fmt.Errorf("failed to get groups: %v", err)
+			// Process individual hosts if specified
+			if len(hostList) > 0 {
+				adhocHosts, err := hosts.ParseAdhocHostsWithLookup(hostList, user, pass, port, sudoPass, configFile)
+				if err != nil {
+					return fmt.Errorf("failed to parse ad-hoc hosts: %v", err)
+				}
+				allHosts = append(allHosts, adhocHosts...)
+			}
+
+			// Validate that at least one host or group is specified
+			if len(allHosts) == 0 {
+				return fmt.Errorf("no hosts specified: use --groups or --hosts")
 			}
 
 			// Execute command on all hosts
-			return executeCommandOnGroups(selectedGroups, command)
+			return executeCommandOnHosts(allHosts, command)
 		},
 	}
 
-	execCmd.Flags().StringSliceVarP(&groups, "groups", "g", []string{}, "Host groups to execute command on (required)")
-	execCmd.MarkFlagRequired("groups")
+	execCmd.Flags().StringSliceVarP(&groups, "groups", "g", []string{}, "Host groups to execute command on")
+	execCmd.Flags().StringSliceVarP(&hostList, "hosts", "H", []string{}, "Individual hosts to execute command on (IP addresses)")
+	execCmd.Flags().StringVarP(&user, "user", "u", "", "Username for ad-hoc hosts (will lookup from config if not provided)")
+	execCmd.Flags().StringVarP(&pass, "pass", "p", "", "Password for ad-hoc hosts (will lookup from config if not provided)")
+	execCmd.Flags().IntVar(&port, "port", 22, "SSH port for ad-hoc hosts")
+	execCmd.Flags().StringVar(&sudoPass, "sudo-pass", "", "Sudo password for ad-hoc hosts (will lookup from config if not provided)")
 
 	return execCmd
 }
 
-// executeCommandOnGroups executes a command on multiple host groups
-func executeCommandOnGroups(groups []config.HostGroup, command string) error {
+// executeCommandOnHosts executes a command on multiple hosts
+func executeCommandOnHosts(hosts []config.Host, command string) error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	errors := make([]string, 0)
 
-	for _, group := range groups {
-		klog.Infof("Executing command on group: %s", group.Name)
+	klog.Infof("Executing command on %d hosts", len(hosts))
 
-		for _, host := range group.Hosts {
-			wg.Add(1)
-			go func(h config.Host) {
-				defer wg.Done()
+	for _, host := range hosts {
+		wg.Add(1)
+		go func(h config.Host) {
+			defer wg.Done()
 
-				if err := executeCommandOnHost(h, command); err != nil {
-					mu.Lock()
-					errors = append(errors, fmt.Sprintf("Host %s: %v", h.IP, err))
-					mu.Unlock()
-				}
-			}(host)
-		}
+			if err := executeCommandOnHost(h, command); err != nil {
+				mu.Lock()
+				errors = append(errors, fmt.Sprintf("Host %s: %v", h.IP, err))
+				mu.Unlock()
+			}
+		}(host)
 	}
 
 	wg.Wait()

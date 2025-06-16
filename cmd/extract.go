@@ -27,7 +27,7 @@ This command parses an Ansible inventory file and extracts:
 - Group-level and host-level configurations
 
 Example:
-  ks-tool extract -i /path/to/ansible/inventory -o hosts.yaml`,
+  ks extract -i /path/to/ansible/inventory -o hosts.yaml`,
 		RunE: runExtract,
 	}
 

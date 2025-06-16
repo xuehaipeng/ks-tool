@@ -210,12 +210,33 @@ The tool uses klog for logging. You can control log verbosity:
 
 ## Building
 
+### Using Makefile (Recommended)
+
+```bash
+# Build for current platform
+make build
+
+# Build for Linux (creates 'ks' binary)
+make linux
+
+# Build for Linux amd64 in build/ directory
+make build-all
+
+# Clean build artifacts
+make clean
+
+# Show all available targets
+make help
+```
+
+### Manual Building
+
 ```bash
 # Build for current platform
 go build -o ks-tool
 
 # Build for Linux
-GOOS=linux GOARCH=amd64 go build -o ks-tool-linux
+GOOS=linux GOARCH=amd64 go build -o ks main.go
 
 # Build for Windows
 GOOS=windows GOARCH=amd64 go build -o ks-tool.exe
