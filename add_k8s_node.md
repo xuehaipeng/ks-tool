@@ -13,6 +13,7 @@ This guide describes how to add new nodes to an existing Kubernetes cluster usin
   - `cilium.tar`
   - Configuration files: `containerd_config.toml`, `containerd.service`, `kubelet.service`, `kube-proxy.service`
   - Kubelet configuration: `kubelet_config.yaml`, `kube-proxy-config.yaml`
+  - System configuration: `/etc/sysctl.d/95-k8s-sysctl.conf` (from master node)
 
 ## Step 1: Prepare Host Configuration
 
@@ -31,7 +32,49 @@ groups:
     port: 22
 ```
 
-## Step 2: Extract and Prepare Containerd
+## Step 2: Configure System Prerequisites
+
+### 2.1 Install Required Packages
+
+Install essential packages required for Kubernetes nodes:
+
+```bash
+# Install packages using a smart detection script
+ks exec 'if command -v yum >/dev/null 2>&1; then
+    echo "Using YUM package manager"
+    yum install -y conntrack socat ipset
+elif command -v dnf >/dev/null 2>&1; then
+    echo "Using DNF package manager"
+    dnf install -y conntrack socat ipset
+elif command -v apt >/dev/null 2>&1; then
+    echo "Using APT package manager"
+    apt update && apt install -y conntrack socat ipset
+elif command -v zypper >/dev/null 2>&1; then
+    echo "Using Zypper package manager"
+    zypper install -y conntrack socat ipset
+else
+    echo "No supported package manager found"
+    exit 1
+fi' --groups new-nodes
+
+# Verify package installation
+ks exec "which conntrack && which socat && which ipset && echo 'All packages installed successfully'" --groups new-nodes
+```
+
+### 2.2 Configure System Settings
+
+```bash
+# Copy sysctl configuration for Kubernetes
+ks scp /etc/sysctl.d/95-k8s-sysctl.conf --groups new-nodes --remote-path /etc/sysctl.d/95-k8s-sysctl.conf
+
+# Apply sysctl settings
+ks exec "sysctl --system" --groups new-nodes
+
+# Verify sysctl settings are applied
+ks exec "sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables net.ipv4.ip_forward" --groups new-nodes
+```
+
+## Step 3: Extract and Prepare Containerd
 
 Extract containerd binaries on the master node:
 
@@ -43,9 +86,9 @@ tar -xzvpf containerd-1.7.20-linux-loong64.tar.gz
 ls -la bin/
 ```
 
-## Step 3: Install Containerd on Target Nodes
+## Step 4: Install Containerd on Target Nodes
 
-### 3.1 Copy Containerd Files
+### 4.1 Copy Containerd Files
 
 ```bash
 # Copy containerd binaries to target nodes
@@ -60,7 +103,7 @@ ks scp pause.tar --groups new-nodes --remote-path /root/pause.tar
 ks scp cilium.tar --groups new-nodes --remote-path /root/cilium.tar
 ```
 
-### 3.2 Install and Configure Containerd
+### 4.2 Install and Configure Containerd
 
 ```bash
 # Create directories and install binaries
@@ -80,7 +123,7 @@ ks exec "systemctl daemon-reload && systemctl enable containerd && systemctl res
 ks exec "systemctl status containerd --no-pager" --groups new-nodes
 ```
 
-### 3.3 Import Container Images
+### 4.3 Import Container Images
 
 ```bash
 # Import pause image
@@ -97,7 +140,7 @@ ks exec "/opt/kube/bin/ctr -n k8s.io i tag registry.tecorigin.io:5443/loong64/ci
 ks exec "/opt/kube/bin/ctr -n k8s.io i ls" --groups new-nodes
 ```
 
-## Step 4: Extract and Prepare Kubernetes Binaries
+## Step 5: Extract and Prepare Kubernetes Binaries
 
 ```bash
 # Extract Kubernetes node binaries
@@ -109,7 +152,7 @@ tar -xzvpf ../kubernetes-node-linux-loong64.tar.gz
 ls -la kubernetes/node/bin/
 ```
 
-## Step 5: Generate Certificates for Each Node
+## Step 6: Generate Certificates for Each Node
 
 For each new node, generate kubelet certificates and kubeconfig files:
 
@@ -125,9 +168,9 @@ ls -la ./certs/worker-1/
 # Should contain: kubelet.pem, kubelet-key.pem, kubelet.kubeconfig, kube-proxy.kubeconfig
 ```
 
-## Step 6: Deploy Kubernetes Components
+## Step 7: Deploy Kubernetes Components
 
-### 6.1 Copy Kubernetes Binaries
+### 7.1 Copy Kubernetes Binaries
 
 ```bash
 # Copy Kubernetes binaries to all nodes
@@ -140,7 +183,7 @@ ks exec "cp /root/k8s-bin/* /opt/kube/bin/" --groups new-nodes
 ks exec "chmod +x /opt/kube/bin/*" --groups new-nodes
 ```
 
-### 6.2 Copy Base Kubernetes Configuration
+### 7.2 Copy Base Kubernetes Configuration
 
 ```bash
 # Copy base Kubernetes configuration from master
@@ -153,7 +196,7 @@ ks scp kubelet.service --groups new-nodes --remote-path /root/kubelet.service
 ks scp kube-proxy.service --groups new-nodes --remote-path /root/kube-proxy.service
 ```
 
-### 6.3 Deploy Node-Specific Certificates
+### 7.3 Deploy Node-Specific Certificates
 
 Deploy certificates for each node individually:
 
@@ -173,7 +216,7 @@ ks scp ./certs/worker-2/kube-proxy.kubeconfig --hosts 192.168.1.101 --remote-pat
 # Repeat for additional nodes...
 ```
 
-## Step 7: Configure and Start Kubelet
+## Step 8: Configure and Start Kubelet
 
 ```bash
 # Create kubelet directories and install configuration
@@ -195,7 +238,7 @@ ks exec "systemctl daemon-reload && systemctl enable kubelet && systemctl restar
 ks exec "systemctl status kubelet --no-pager" --groups new-nodes
 ```
 
-## Step 8: Configure and Start Kube-proxy
+## Step 9: Configure and Start Kube-proxy
 
 ```bash
 # Create kube-proxy directories and install configuration
@@ -213,9 +256,9 @@ ks exec "systemctl daemon-reload && systemctl enable kube-proxy && systemctl res
 ks exec "systemctl status kube-proxy --no-pager" --groups new-nodes
 ```
 
-## Step 9: Verify Node Addition
+## Step 10: Verify Node Addition
 
-### 9.1 Check Node Status
+### 10.1 Check Node Status
 
 ```bash
 # Check if nodes appear in the cluster
@@ -226,7 +269,7 @@ kubectl describe node worker-1
 kubectl describe node worker-2
 ```
 
-### 9.2 Label Nodes
+### 10.2 Label Nodes
 
 ```bash
 # Label nodes with appropriate roles
@@ -237,7 +280,7 @@ kubectl label node worker-2 kubernetes.io/role=node
 kubectl get nodes --show-labels
 ```
 
-### 9.3 Verify Services on Nodes
+### 10.3 Verify Services on Nodes
 
 ```bash
 # Check all services are running properly
@@ -250,9 +293,9 @@ ks exec "journalctl -u kubelet --no-pager -l" --groups new-nodes
 ks exec "journalctl -u kube-proxy --no-pager -l" --groups new-nodes
 ```
 
-## Step 10: Post-Installation Verification
+## Step 11: Post-Installation Verification
 
-### 10.1 Test Pod Scheduling
+### 11.1 Test Pod Scheduling
 
 ```bash
 # Create a test deployment to verify nodes can schedule pods
@@ -265,7 +308,7 @@ kubectl get pods -o wide
 kubectl delete deployment test-nginx
 ```
 
-### 10.2 Verify Network Connectivity
+### 11.2 Verify Network Connectivity
 
 ```bash
 # Test network connectivity between nodes
@@ -310,6 +353,28 @@ kubectl get pods -n kube-system -o wide | grep cilium
    
    # Redeploy certificates
    ks scp ./certs/worker-1-new/kubelet.pem --hosts 192.168.1.100 --remote-path /etc/kubernetes/ssl/kubelet.pem
+   ```
+
+5. **Package installation issues**:
+   ```bash
+   # Check what package manager is available
+   ks exec "command -v yum && echo 'YUM available' || echo 'YUM not available'" --groups new-nodes
+   ks exec "command -v apt && echo 'APT available' || echo 'APT not available'" --groups new-nodes
+   ks exec "command -v dnf && echo 'DNF available' || echo 'DNF not available'" --groups new-nodes
+   
+   # Manual package installation if automatic detection fails
+   ks exec "yum install -y conntrack socat ipset" --groups new-nodes  # For RHEL/CentOS
+   ks exec "apt update && apt install -y conntrack socat ipset" --groups new-nodes  # For Ubuntu/Debian
+   ```
+
+6. **Sysctl configuration issues**:
+   ```bash
+   # Check if sysctl file was copied correctly
+   ks exec "ls -la /etc/sysctl.d/95-k8s-sysctl.conf" --groups new-nodes
+   
+   # Manually apply sysctl settings if needed
+   ks exec "echo 'net.bridge.bridge-nf-call-iptables = 1' >> /etc/sysctl.conf && echo 'net.bridge.bridge-nf-call-ip6tables = 1' >> /etc/sysctl.conf && echo 'net.ipv4.ip_forward = 1' >> /etc/sysctl.conf" --groups new-nodes
+   ks exec "sysctl -p" --groups new-nodes
    ```
 
 ## Automation Script
