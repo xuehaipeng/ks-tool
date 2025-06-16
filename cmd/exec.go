@@ -29,16 +29,27 @@ func NewExecCmd() *cobra.Command {
 		Long: `Execute a shell command on one or more groups of remote hosts or individual hosts as root user.
 
 You can specify either groups from your hosts.yaml file or individual hosts with connection details.
+Supports complex shell operations including pipelines, redirections, and command chaining.
 
 Examples:
   # Execute on groups
   ks exec "uptime" --groups web-servers,db-servers
   
+  # Pipeline operations
+  ks exec "lscpu | grep 'Model name'" --groups web-servers
+  ks exec "ps aux | grep nginx | wc -l" --groups web-servers
+  
+  # Command chaining and redirections
+  ks exec "df -h > /tmp/disk_usage.txt && cat /tmp/disk_usage.txt" --groups web-servers
+  
   # Execute on individual hosts
   ks exec "uptime" --hosts 192.168.1.10,192.168.1.11 --user root --pass password123
   
+  # Complex pipeline on individual hosts
+  ks exec "cat /proc/cpuinfo | grep processor | wc -l" --hosts 192.168.1.10 --user admin
+  
   # Mix of groups and individual hosts
-  ks exec "uptime" --groups web-servers --hosts 192.168.1.20 --user admin --pass secret`,
+  ks exec "systemctl status nginx | head -5" --groups web-servers --hosts 192.168.1.20 --user admin --pass secret`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			command := args[0]

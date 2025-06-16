@@ -100,17 +100,24 @@ groups:
 
 ### Execute Commands
 
-Execute a command on specific host groups:
+Execute a command on specific host groups. Supports complex shell operations including pipelines, redirections, and command chaining:
 
 ```bash
 # Execute command on web-servers group
-./ks-tool exec "ls -la /var/log" --groups web-servers
+./ks exec "ls -la /var/log" --groups web-servers
+
+# Pipeline operations
+./ks exec "lscpu | grep 'Model name'" --groups web-servers
+./ks exec "ps aux | grep nginx | wc -l" --groups web-servers
+
+# Command chaining and redirections
+./ks exec "df -h > /tmp/disk_usage.txt && cat /tmp/disk_usage.txt" --groups web-servers
 
 # Execute command on multiple groups
-./ks-tool exec "systemctl status nginx" --groups web-servers,app-servers
+./ks exec "systemctl status nginx" --groups web-servers,app-servers
 
 # Use custom config file
-./ks-tool exec "uptime" --groups web-servers --config my-hosts.yaml
+./ks exec "uptime" --groups web-servers --config my-hosts.yaml
 ```
 
 ### Copy Files
@@ -119,10 +126,10 @@ Copy files to remote hosts via SCP:
 
 ```bash
 # Copy file to web-servers group
-./ks-tool scp /local/path/to/file.txt --groups web-servers --remote-path /remote/path/file.txt
+./ks scp /local/path/to/file.txt --groups web-servers --remote-path /remote/path/file.txt
 
 # Copy to multiple groups
-./ks-tool scp script.sh --groups web-servers,app-servers --remote-path /tmp/script.sh
+./ks scp script.sh --groups web-servers,app-servers --remote-path /tmp/script.sh
 ```
 
 ### Extract Ansible Inventory
@@ -131,10 +138,10 @@ Convert Ansible inventory files to hosts.yaml format:
 
 ```bash
 # Extract SSH information from Ansible inventory
-./ks-tool extract -i /path/to/ansible/inventory -o hosts.yaml
+./ks extract -i /path/to/ansible/inventory -o hosts.yaml
 
 # Extract to custom output file
-./ks-tool extract --input inventory.ini --output my-hosts.yaml
+./ks extract --input inventory.ini --output my-hosts.yaml
 ```
 
 The extract command will:
@@ -167,38 +174,47 @@ The tool uses klog for logging. You can control log verbosity:
 
 ```bash
 # Basic logging
-./ks-tool exec "hostname" --groups web-servers
+./ks exec "hostname" --groups web-servers
 
 # Verbose logging
-./ks-tool exec "hostname" --groups web-servers --v=2
+./ks exec "hostname" --groups web-servers --v=2
 
 # Debug logging
-./ks-tool exec "hostname" --groups web-servers --v=4
+./ks exec "hostname" --groups web-servers --v=4
 ```
 
 ## Examples
 
 ```bash
 # Check disk usage on all web servers
-./ks-tool exec "df -h" --groups web-servers
+./ks exec "df -h" --groups web-servers
+
+# Pipeline operations to get CPU info
+./ks exec "lscpu | grep 'Model name'" --groups web-servers
+
+# Count running processes
+./ks exec "ps aux | wc -l" --groups web-servers
 
 # Restart nginx on web servers
-./ks-tool exec "systemctl restart nginx" --groups web-servers
+./ks exec "systemctl restart nginx" --groups web-servers
 
 # Deploy a script to app servers
-./ks-tool scp deploy.sh --groups app-servers --remote-path /tmp/deploy.sh
+./ks scp deploy.sh --groups app-servers --remote-path /tmp/deploy.sh
 
-# Execute the deployed script
-./ks-tool exec "chmod +x /tmp/deploy.sh && /tmp/deploy.sh" --groups app-servers
+# Execute the deployed script with pipeline
+./ks exec "chmod +x /tmp/deploy.sh && /tmp/deploy.sh | tee /tmp/deploy.log" --groups app-servers
 
 # Update package lists on multiple groups
-./ks-tool exec "apt update" --groups web-servers,database-servers,app-servers
+./ks exec "apt update" --groups web-servers,database-servers,app-servers
+
+# Complex pipeline to check system resources
+./ks exec "free -h && echo '---' && df -h | grep -v tmpfs" --groups web-servers
 
 # Convert Ansible inventory to hosts.yaml
-./ks-tool extract -i /etc/ansible/inventory -o k8s-hosts.yaml
+./ks extract -i /etc/ansible/inventory -o k8s-hosts.yaml
 
 # Then use the converted hosts file for operations
-./ks-tool exec "kubectl get nodes" --groups kube_master --config k8s-hosts.yaml
+./ks exec "kubectl get nodes" --groups kube_master --config k8s-hosts.yaml
 ```
 
 ## Security Notes

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/xuehaipeng/ks-tool/pkg/config"
@@ -60,21 +61,33 @@ func (c *Client) ExecuteCommand(command string) (string, error) {
 	}
 	defer session.Close()
 
-	// If we have a sudo password, prefix the command with sudo
+	// Wrap the entire command in a shell to properly handle pipelines, redirections, etc.
+	// This ensures that complex commands like "lscpu | grep 'Model name'" work correctly
+	var fullCommand string
 	if c.host.SudoPassword != "" {
-		command = fmt.Sprintf("echo '%s' | sudo -S %s", c.host.SudoPassword, command)
+		// Use sudo with password and execute the command in a shell
+		fullCommand = fmt.Sprintf("echo '%s' | sudo -S sh -c %s", c.host.SudoPassword, shellQuote(command))
 	} else {
-		command = fmt.Sprintf("sudo %s", command)
+		// Use sudo without password and execute the command in a shell
+		fullCommand = fmt.Sprintf("sudo sh -c %s", shellQuote(command))
 	}
 
-	klog.V(2).Infof("Executing command on %s: %s", c.host.IP, command)
+	klog.V(2).Infof("Executing command on %s: %s", c.host.IP, fullCommand)
 
-	output, err := session.CombinedOutput(command)
+	output, err := session.CombinedOutput(fullCommand)
 	if err != nil {
 		return string(output), fmt.Errorf("command failed: %v", err)
 	}
 
 	return string(output), nil
+}
+
+// shellQuote properly quotes a command for shell execution
+func shellQuote(command string) string {
+	// Use single quotes to prevent shell interpretation of special characters
+	// Replace any single quotes in the command with '\''
+	escaped := strings.ReplaceAll(command, "'", "'\"'\"'")
+	return fmt.Sprintf("'%s'", escaped)
 }
 
 // CopyFile copies a local file to the remote host
