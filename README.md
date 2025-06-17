@@ -346,12 +346,6 @@ ks exec "kubectl get nodes" --groups kube_master --config k8s-hosts.yaml
 # Build for current platform
 make build
 
-# Build for Linux (creates 'ks' binary)
-make linux
-
-# Build for Linux amd64 in build/ directory
-make build-all
-
 # Clean build artifacts
 make clean
 
