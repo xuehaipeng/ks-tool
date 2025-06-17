@@ -164,51 +164,24 @@ func (c *Client) CopyFile(localPath, remotePath string) error {
 		return fmt.Errorf("failed to get file info: %v", err)
 	}
 
-	// Create SCP session
-	session, err := c.client.NewSession()
+	// Read file content
+	fileContent, err := io.ReadAll(localFile)
 	if err != nil {
-		return fmt.Errorf("failed to create session: %v", err)
+		return fmt.Errorf("failed to read file content: %v", err)
 	}
-	defer session.Close()
 
 	// Create remote directory if needed
 	remoteDir := filepath.Dir(remotePath)
-	if remoteDir != "." {
+	if remoteDir != "." && remoteDir != "/" {
 		if err := c.createRemoteDir(remoteDir); err != nil {
 			return fmt.Errorf("failed to create remote directory: %v", err)
 		}
 	}
 
-	// Prepare SCP command
-	go func() {
-		w, _ := session.StdinPipe()
-		defer w.Close()
-
-		// Send file header
-		fmt.Fprintf(w, "C%#o %d %s\n", fileInfo.Mode().Perm(), fileInfo.Size(), filepath.Base(remotePath))
-
-		// Send file content
-		io.Copy(w, localFile)
-
-		// Send end-of-file marker
-		fmt.Fprint(w, "\x00")
-	}()
-
-	// Run SCP command
-	scpCmd := fmt.Sprintf("scp -t %s", remotePath)
-	if c.host.SudoPassword != "" {
-		scpCmd = fmt.Sprintf("echo '%s' | sudo -S %s", c.host.SudoPassword, scpCmd)
-	} else {
-		scpCmd = fmt.Sprintf("sudo %s", scpCmd)
-	}
-
 	klog.V(2).Infof("Copying file to %s: %s -> %s", c.host.IP, localPath, remotePath)
 
-	if err := session.Run(scpCmd); err != nil {
-		return fmt.Errorf("SCP failed: %v", err)
-	}
-
-	return nil
+	// Create the file using cat command with proper escaping
+	return c.createRemoteFile(remotePath, fileContent, fileInfo.Mode().Perm())
 }
 
 // createRemoteDir creates a directory on the remote host
@@ -216,4 +189,47 @@ func (c *Client) createRemoteDir(remotePath string) error {
 	cmd := fmt.Sprintf("mkdir -p %s", remotePath)
 	_, err := c.ExecuteCommand(cmd)
 	return err
+}
+
+// createRemoteFile creates a file on the remote host with the given content
+func (c *Client) createRemoteFile(remotePath string, content []byte, mode os.FileMode) error {
+	// Use base64 encoding to safely transfer binary content
+	session, err := c.client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %v", err)
+	}
+	defer session.Close()
+
+	// Create a temporary file and write content to it, then move to final location
+	tempFile := fmt.Sprintf("/tmp/ks-temp-%d", time.Now().UnixNano())
+
+	// Get stdin pipe
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdin pipe: %v", err)
+	}
+
+	// Prepare command to read from stdin and write to temp file, then move to final location
+	var cmd string
+	if c.host.SudoPassword != "" {
+		cmd = fmt.Sprintf("echo '%s' | sudo -S sh -c 'cat > %s && mv %s %s && chmod %o %s'",
+			c.host.SudoPassword, tempFile, tempFile, remotePath, mode, remotePath)
+	} else {
+		cmd = fmt.Sprintf("sudo sh -c 'cat > %s && mv %s %s && chmod %o %s'",
+			tempFile, tempFile, remotePath, mode, remotePath)
+	}
+
+	// Start the command
+	go func() {
+		defer stdin.Close()
+		stdin.Write(content)
+	}()
+
+	klog.V(3).Infof("Creating remote file with command: %s", cmd)
+
+	if err := session.Run(cmd); err != nil {
+		return fmt.Errorf("failed to create remote file: %v", err)
+	}
+
+	return nil
 }

@@ -120,8 +120,19 @@ ks exec "which conntrack && which socat && which ipset && echo 'All packages ins
 ### 3.2 Configure System Settings
 
 ```bash
-# Copy sysctl configuration for Kubernetes
+# Option 1: Copy sysctl configuration file (recommended if file exists)
 ks scp /etc/sysctl.d/95-k8s-sysctl.conf --groups new-nodes --remote-path /etc/sysctl.d/95-k8s-sysctl.conf
+
+# Option 2: Create sysctl configuration directly if SCP fails or file doesn't exist
+# ks exec "mkdir -p /etc/sysctl.d && cat > /etc/sysctl.d/95-k8s-sysctl.conf << 'EOF'
+# net.bridge.bridge-nf-call-iptables = 1
+# net.bridge.bridge-nf-call-ip6tables = 1
+# net.ipv4.ip_forward = 1
+# net.ipv4.conf.all.forwarding = 1
+# net.ipv4.conf.default.forwarding = 1
+# net.ipv6.conf.all.forwarding = 1
+# net.ipv6.conf.default.forwarding = 1
+# EOF" --groups new-nodes
 
 # Apply sysctl settings
 ks exec "sysctl --system" --groups new-nodes
