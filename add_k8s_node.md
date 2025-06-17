@@ -23,13 +23,55 @@ This guide describes how to add new nodes to an existing Kubernetes cluster usin
 - Required artifacts in the current directory:
   - `containerd-1.7.20-linux-loong64.tar.gz`
   - `kubernetes-node-linux-loong64.tar.gz`
-  - `pause.tar`
-  - `cilium.tar`
+  - Offline container images: `pause.tar.gz`, `cilium.tar.gz`, `k8s-dns-node-cache.tar.gz`
   - Configuration files: `containerd_config.toml`, `containerd.service`, `kubelet.service`, `kube-proxy.service`
   - Kubelet configuration: `kubelet_config.yaml`, `kube-proxy-config.yaml`
   - System configuration: `/etc/sysctl.d/95-k8s-sysctl.conf` (from master node)
+  - RBAC configuration: `node-rbac.yaml` (to be applied on master node)
 
-## Step 1: Prepare Host Configuration
+## Step 1: Apply Node RBAC Configuration
+
+Before adding new nodes, apply the required RBAC configuration on the master node to ensure proper node permissions:
+
+```bash
+# Apply node RBAC configuration on the master node
+kubectl apply -f node-rbac.yaml
+
+# Verify the RBAC resources were created
+kubectl get clusterrole system:node-lease-access
+kubectl get clusterrolebinding system:node-lease-access-binding
+```
+
+The `node-rbac.yaml` file should contain:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:node-lease-access
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update", "patch", "delete"]
+  - apiGroups: [ "storage.k8s.io" ]
+    resources: [ "csinodes" ]
+    verbs: [ "get", "list", "watch" ]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:node-lease-access-binding
+subjects:
+  - kind: Group
+    name: system:nodes
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: system:node-lease-access
+  apiGroup: rbac.authorization.k8s.io
+```
+
+## Step 2: Prepare Host Configuration
 
 Create a `hosts.yaml` file for the new nodes:
 
@@ -46,9 +88,9 @@ groups:
     port: 22
 ```
 
-## Step 2: Configure System Prerequisites
+## Step 3: Configure System Prerequisites
 
-### 2.1 Install Required Packages
+### 3.1 Install Required Packages
 
 Install essential packages required for Kubernetes nodes:
 
@@ -75,7 +117,7 @@ fi' --groups new-nodes
 ks exec "which conntrack && which socat && which ipset && echo 'All packages installed successfully'" --groups new-nodes
 ```
 
-### 2.2 Configure System Settings
+### 3.2 Configure System Settings
 
 ```bash
 # Copy sysctl configuration for Kubernetes
@@ -88,7 +130,7 @@ ks exec "sysctl --system" --groups new-nodes
 ks exec "sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables net.ipv4.ip_forward" --groups new-nodes
 ```
 
-## Step 3: Extract and Prepare Containerd
+## Step 4: Extract and Prepare Containerd
 
 Extract containerd binaries on the master node:
 
@@ -100,9 +142,9 @@ tar -xzvpf containerd-1.7.20-linux-loong64.tar.gz
 ls -la bin/
 ```
 
-## Step 4: Install Containerd on Target Nodes
+## Step 5: Install Containerd on Target Nodes
 
-### 4.1 Copy Containerd Files
+### 5.1 Copy Containerd Files
 
 ```bash
 # Copy containerd binaries to target nodes
@@ -113,11 +155,12 @@ ks scp containerd_config.toml --groups new-nodes --remote-path /root/containerd_
 ks scp containerd.service --groups new-nodes --remote-path /root/containerd.service
 
 # Copy container images
-ks scp pause.tar --groups new-nodes --remote-path /root/pause.tar
-ks scp cilium.tar --groups new-nodes --remote-path /root/cilium.tar
+ks scp pause.tar.gz --groups new-nodes --remote-path /root/pause.tar.gz
+ks scp cilium.tar.gz --groups new-nodes --remote-path /root/cilium.tar.gz
+ks scp k8s-dns-node-cache.tar.gz --groups new-nodes --remote-path /root/k8s-dns-node-cache.tar.gz
 ```
 
-### 4.2 Install and Configure Containerd
+### 5.2 Install and Configure Containerd
 
 ```bash
 # Create directories and install binaries
@@ -137,24 +180,28 @@ ks exec "systemctl daemon-reload && systemctl enable containerd && systemctl res
 ks exec "systemctl status containerd --no-pager" --groups new-nodes
 ```
 
-### 4.3 Import Container Images
+### 5.3 Import Container Images
 
 ```bash
-# Import pause image
-ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/pause.tar" --groups new-nodes
+# Import pause image directly from compressed archive
+ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/pause.tar.gz" --groups new-nodes
 
-# Import cilium image
-ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/cilium.tar" --groups new-nodes
+# Import cilium image directly from compressed archive
+ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/cilium.tar.gz" --groups new-nodes
 
-# Tag images for local registry
-ks exec "/opt/kube/bin/ctr -n k8s.io i tag registry.tecorigin.io:5443/loong64/pause:3.9 registry.tecorigin.local:5000/easzlab/pause:3.9" --groups new-nodes
-ks exec "/opt/kube/bin/ctr -n k8s.io i tag registry.tecorigin.io:5443/loong64/cilium/cilium:v1.15.4 registry.tecorigin.local:5000/cilium/cilium:v1.15.5" --groups new-nodes
+# Import DNS node cache image directly from compressed archive
+ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/k8s-dns-node-cache.tar.gz" --groups new-nodes
 
-# Verify imported images
+# Verify imported images (should show the correct tags already)
 ks exec "/opt/kube/bin/ctr -n k8s.io i ls" --groups new-nodes
+
+# Expected images after import:
+# - registry.tecorigin.local:5000/easzlab/pause:3.9
+# - registry.tecorigin.local:5000/cilium/cilium:v1.15.5  
+# - registry.tecorigin.io:5443/loong64/easzlab/k8s-dns-node-cache:1.22.28
 ```
 
-## Step 5: Extract and Prepare Kubernetes Binaries
+## Step 6: Extract and Prepare Kubernetes Binaries
 
 ```bash
 # Extract Kubernetes node binaries
@@ -166,7 +213,7 @@ tar -xzvpf ../kubernetes-node-linux-loong64.tar.gz
 ls -la kubernetes/node/bin/
 ```
 
-## Step 6: Generate Certificates for Each Node
+## Step 7: Generate Certificates for Each Node
 
 For each new node, generate kubelet certificates and kubeconfig files:
 
@@ -182,9 +229,9 @@ ls -la ./certs/worker-1/
 # Should contain: kubelet.pem, kubelet-key.pem, kubelet.kubeconfig, kube-proxy.kubeconfig
 ```
 
-## Step 7: Deploy Kubernetes Components
+## Step 8: Deploy Kubernetes Components
 
-### 7.1 Copy Kubernetes Binaries
+### 8.1 Copy Kubernetes Binaries
 
 ```bash
 # Copy Kubernetes binaries to all nodes
@@ -197,7 +244,7 @@ ks exec "cp /root/k8s-bin/* /opt/kube/bin/" --groups new-nodes
 ks exec "chmod +x /opt/kube/bin/*" --groups new-nodes
 ```
 
-### 7.2 Copy Base Kubernetes Configuration
+### 8.2 Copy Base Kubernetes Configuration
 
 ```bash
 # Copy base Kubernetes configuration from master
@@ -210,7 +257,7 @@ ks scp kubelet.service --groups new-nodes --remote-path /root/kubelet.service
 ks scp kube-proxy.service --groups new-nodes --remote-path /root/kube-proxy.service
 ```
 
-### 7.3 Deploy Node-Specific Certificates
+### 8.3 Deploy Node-Specific Certificates
 
 Deploy certificates for each node individually:
 
@@ -230,7 +277,7 @@ ks scp ./certs/worker-2/kube-proxy.kubeconfig --hosts 192.168.1.101 --remote-pat
 # Repeat for additional nodes...
 ```
 
-## Step 8: Configure and Start Kubelet
+## Step 9: Configure and Start Kubelet
 
 ```bash
 # Create kubelet directories and install configuration
@@ -252,7 +299,7 @@ ks exec "systemctl daemon-reload && systemctl enable kubelet && systemctl restar
 ks exec "systemctl status kubelet --no-pager" --groups new-nodes
 ```
 
-## Step 9: Configure and Start Kube-proxy
+## Step 10: Configure and Start Kube-proxy
 
 ```bash
 # Create kube-proxy directories and install configuration
@@ -270,9 +317,9 @@ ks exec "systemctl daemon-reload && systemctl enable kube-proxy && systemctl res
 ks exec "systemctl status kube-proxy --no-pager" --groups new-nodes
 ```
 
-## Step 10: Verify Node Addition
+## Step 11: Verify Node Addition
 
-### 10.1 Check Node Status
+### 11.1 Check Node Status
 
 ```bash
 # Check if nodes appear in the cluster
@@ -283,7 +330,7 @@ kubectl describe node worker-1
 kubectl describe node worker-2
 ```
 
-### 10.2 Label Nodes
+### 11.2 Label Nodes
 
 ```bash
 # Label nodes with appropriate roles
@@ -294,7 +341,7 @@ kubectl label node worker-2 kubernetes.io/role=node
 kubectl get nodes --show-labels
 ```
 
-### 10.3 Verify Services on Nodes
+### 11.3 Verify Services on Nodes
 
 ```bash
 # Check all services are running properly
@@ -307,9 +354,9 @@ ks exec "journalctl -u kubelet --no-pager -l" --groups new-nodes
 ks exec "journalctl -u kube-proxy --no-pager -l" --groups new-nodes
 ```
 
-## Step 11: Post-Installation Verification
+## Step 12: Post-Installation Verification
 
-### 11.1 Test Pod Scheduling
+### 12.1 Test Pod Scheduling
 
 ```bash
 # Create a test deployment to verify nodes can schedule pods
@@ -322,7 +369,7 @@ kubectl get pods -o wide
 kubectl delete deployment test-nginx
 ```
 
-### 11.2 Verify Network Connectivity
+### 12.2 Verify Network Connectivity
 
 ```bash
 # Test network connectivity between nodes
