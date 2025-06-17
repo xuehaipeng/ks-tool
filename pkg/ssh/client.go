@@ -64,15 +64,19 @@ func (c *Client) ExecuteCommand(command string) (string, error) {
 	// Wrap the entire command in a shell to properly handle pipelines, redirections, etc.
 	// This ensures that complex commands like "lscpu | grep 'Model name'" work correctly
 	var fullCommand string
+	var logCommand string
 	if c.host.SudoPassword != "" {
 		// Use sudo with password and execute the command in a shell
 		fullCommand = fmt.Sprintf("echo '%s' | sudo -S sh -c %s", c.host.SudoPassword, shellQuote(command))
+		// Log command without password for security
+		logCommand = fmt.Sprintf("echo '[REDACTED]' | sudo -S sh -c %s", shellQuote(command))
 	} else {
 		// Use sudo without password and execute the command in a shell
 		fullCommand = fmt.Sprintf("sudo sh -c %s", shellQuote(command))
+		logCommand = fullCommand
 	}
 
-	klog.V(2).Infof("Executing command on %s: %s", c.host.IP, fullCommand)
+	klog.V(2).Infof("Executing command on %s: %s", c.host.IP, logCommand)
 
 	output, err := session.CombinedOutput(fullCommand)
 	if err != nil {
@@ -193,42 +197,44 @@ func (c *Client) createRemoteDir(remotePath string) error {
 
 // createRemoteFile creates a file on the remote host with the given content
 func (c *Client) createRemoteFile(remotePath string, content []byte, mode os.FileMode) error {
-	// Use base64 encoding to safely transfer binary content
-	session, err := c.client.NewSession()
-	if err != nil {
-		return fmt.Errorf("failed to create session: %v", err)
-	}
-	defer session.Close()
-
 	// Create a temporary file and write content to it, then move to final location
 	tempFile := fmt.Sprintf("/tmp/ks-temp-%d", time.Now().UnixNano())
 
-	// Get stdin pipe
-	stdin, err := session.StdinPipe()
+	// First, create the temp file with content using stdin
+	session1, err := c.client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %v", err)
+	}
+	defer session1.Close()
+
+	// Get stdin pipe for writing content
+	stdin, err := session1.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("failed to get stdin pipe: %v", err)
 	}
 
-	// Prepare command to read from stdin and write to temp file, then move to final location
-	var cmd string
-	if c.host.SudoPassword != "" {
-		cmd = fmt.Sprintf("echo '%s' | sudo -S sh -c 'cat > %s && mv %s %s && chmod %o %s'",
-			c.host.SudoPassword, tempFile, tempFile, remotePath, mode, remotePath)
-	} else {
-		cmd = fmt.Sprintf("sudo sh -c 'cat > %s && mv %s %s && chmod %o %s'",
-			tempFile, tempFile, remotePath, mode, remotePath)
-	}
+	// Write content to temp file
+	cmd1 := fmt.Sprintf("cat > %s", tempFile)
 
-	// Start the command
+	// Start writing content in goroutine
 	go func() {
 		defer stdin.Close()
 		stdin.Write(content)
 	}()
 
-	klog.V(3).Infof("Creating remote file with command: %s", cmd)
+	klog.V(3).Infof("Creating temporary file: %s", tempFile)
 
-	if err := session.Run(cmd); err != nil {
-		return fmt.Errorf("failed to create remote file: %v", err)
+	if err := session1.Run(cmd1); err != nil {
+		return fmt.Errorf("failed to create temporary file: %v", err)
+	}
+
+	// Now move the file to final location with proper permissions using sudo
+	cmd2 := fmt.Sprintf("mv %s %s && chmod %o %s", tempFile, remotePath, mode, remotePath)
+	_, err = c.ExecuteCommand(cmd2)
+	if err != nil {
+		// Clean up temp file if move fails
+		c.ExecuteCommand(fmt.Sprintf("rm -f %s", tempFile))
+		return fmt.Errorf("failed to move file to final location: %v", err)
 	}
 
 	return nil

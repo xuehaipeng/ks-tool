@@ -120,25 +120,11 @@ ks exec "which conntrack && which socat && which ipset && echo 'All packages ins
 ### 3.2 Configure System Settings
 
 ```bash
-# Option 1: Copy sysctl configuration file (recommended if file exists)
+# Copy sysctl configuration file (recommended if file exists)
 ks scp /etc/sysctl.d/95-k8s-sysctl.conf --groups new-nodes --remote-path /etc/sysctl.d/95-k8s-sysctl.conf
-
-# Option 2: Create sysctl configuration directly if SCP fails or file doesn't exist
-# ks exec "mkdir -p /etc/sysctl.d && cat > /etc/sysctl.d/95-k8s-sysctl.conf << 'EOF'
-# net.bridge.bridge-nf-call-iptables = 1
-# net.bridge.bridge-nf-call-ip6tables = 1
-# net.ipv4.ip_forward = 1
-# net.ipv4.conf.all.forwarding = 1
-# net.ipv4.conf.default.forwarding = 1
-# net.ipv6.conf.all.forwarding = 1
-# net.ipv6.conf.default.forwarding = 1
-# EOF" --groups new-nodes
 
 # Apply sysctl settings
 ks exec "sysctl --system" --groups new-nodes
-
-# Verify sysctl settings are applied
-ks exec "sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables net.ipv4.ip_forward" --groups new-nodes
 ```
 
 ## Step 4: Extract and Prepare Containerd
@@ -181,19 +167,9 @@ ks exec "mkdir -p /opt/kube/bin/ /opt/kube/bin/containerd-bin/ /etc/containerd/"
 ks exec "cp /root/bin/* /opt/kube/bin/ && cp /root/bin/* /opt/kube/bin/containerd-bin/" --groups new-nodes
 
 # Install configuration files
-ks exec "cp /root/containerd_config.toml /etc/containerd/config.toml" --groups new-nodes
-ks exec "cp /root/containerd.service /etc/systemd/system/containerd.service" --groups new-nodes
+ks exec "cp /etc/containerd/config.toml /etc/containerd/config.toml" --groups new-nodes
+ks exec "cp /etc/systemd/system/containerd.service /etc/systemd/system/containerd.service" --groups new-nodes
 
-# Enable and start containerd service
-ks exec "systemctl daemon-reload && systemctl enable containerd && systemctl restart containerd" --groups new-nodes
-
-# Verify containerd status
-ks exec "systemctl status containerd --no-pager" --groups new-nodes
-```
-
-### 5.3 Import Container Images
-
-```bash
 # Import pause image directly from compressed archive
 ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/pause.tar.gz" --groups new-nodes
 
@@ -210,6 +186,12 @@ ks exec "/opt/kube/bin/ctr -n k8s.io i ls" --groups new-nodes
 # - registry.tecorigin.local:5000/easzlab/pause:3.9
 # - registry.tecorigin.local:5000/cilium/cilium:v1.15.5  
 # - registry.tecorigin.io:5443/loong64/easzlab/k8s-dns-node-cache:1.22.28
+
+# Enable and start containerd service
+ks exec "systemctl daemon-reload && systemctl enable containerd && systemctl restart containerd" --groups new-nodes
+
+# Verify containerd status
+ks exec "systemctl status containerd --no-pager" --groups new-nodes
 ```
 
 ## Step 6: Extract and Prepare Kubernetes Binaries
@@ -246,7 +228,7 @@ ls -la ./certs/worker-1/
 
 ```bash
 # Copy Kubernetes binaries to all nodes
-ks scp kubernetes/node/bin/ --groups new-nodes --remote-path /root/k8s-bin --recursive
+ks scp tmp-k8s/kubernetes/node/bin/ --groups new-nodes --remote-path /root/k8s-bin --recursive
 
 # Install binaries to system location
 ks exec "cp /root/k8s-bin/* /opt/kube/bin/" --groups new-nodes
