@@ -1,41 +1,47 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v2"
 	"k8s.io/klog/v2"
 )
 
 // NewGenCertCmd creates a new gencert command
 func NewGenCertCmd() *cobra.Command {
 	var (
-		hostname            string
-		ipAddress           string
-		apiServer           string
-		caFile              string
-		caKeyFile           string
-		certFile            string
-		keyFile             string
-		kubeconfigFile      string
-		kubeProxyConfigFile string
-		outputDir           string
-		country             string
-		state               string
-		locality            string
-		organization        string
-		orgUnit             string
+		hostname             string
+		ipAddress            string
+		apiServer            string
+		caFile               string
+		caKeyFile            string
+		certFile             string
+		keyFile              string
+		kubeconfigFile       string
+		kubeProxyConfigFile  string
+		outputDir            string
+		country              string
+		state                string
+		locality             string
+		organization         string
+		orgUnit              string
+		clusterCIDR          string
+		kubeletDataDir       string
+		generateServiceFiles bool
 	)
 
 	genCertCmd := &cobra.Command{
 		Use:   "gencert",
-		Short: "Generate kubelet certificates and kubeconfig files",
-		Long: `Generate kubelet certificates and kubeconfig files for Kubernetes nodes.
+		Short: "Generate kubelet certificates, kubeconfig files, and service configurations",
+		Long: `Generate kubelet certificates, kubeconfig files, and service configurations for Kubernetes nodes.
 
 This command creates kubelet certificates signed by the specified CA certificate
 and generates corresponding kubeconfig files with base64-encoded certificates.
@@ -43,24 +49,33 @@ It generates both kubelet.kubeconfig and kube-proxy.kubeconfig files using the
 same certificates. The generated certificates include proper subject alternative 
 names (SANs) for both hostname and IP address.
 
+Additionally, it can generate node-specific service configuration files:
+- kubelet.service systemd unit file with proper hostname and IP configuration
+- kube-proxy-config.yaml with cluster CIDR and hostname settings
+
+The command automatically detects configuration from the local master node:
+- Cluster CIDR is read from /var/lib/kube-proxy/kube-proxy-config.yaml
+- Kubelet data directory is read from /etc/systemd/system/kubelet.service
+- Falls back to defaults if local files are not found or cannot be parsed
+
 Examples:
-  # Generate kubelet cert and kubeconfig files for a node
+  # Generate kubelet cert and kubeconfig files for a node (auto-detects config)
   ks gencert --hostname worker-1 --ip 192.168.1.100
   
-  # Generate with custom API server address
+  # Generate with custom API server address (auto-detects cluster CIDR and data dir)
   ks gencert --hostname master-1 --ip 10.0.1.10 --apiserver https://10.0.1.10:6443
   
-  # Generate with custom CA files
-  ks gencert --hostname master-1 --ip 10.0.1.10 --ca-file /path/to/ca.pem --ca-key-file /path/to/ca-key.pem
+  # Override auto-detected values with custom settings
+  ks gencert --hostname master-1 --ip 10.0.1.10 --cluster-cidr 10.244.0.0/16 --kubelet-data-dir /var/lib/kubelet
   
-  # Generate with custom output paths
-  ks gencert --hostname node-1 --ip 172.16.1.50 --cert-file /tmp/kubelet.pem --key-file /tmp/kubelet-key.pem --kubeconfig-file /tmp/kubelet.kubeconfig --kube-proxy-config-file /tmp/kube-proxy.kubeconfig
+  # Generate without service files (certificates and kubeconfig only)
+  ks gencert --hostname node-1 --ip 172.16.1.50 --generate-service-files=false
   
   # Generate with custom certificate details
   ks gencert --hostname node-1 --ip 192.168.1.10 --country US --state California --locality "San Francisco"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return generateKubeletCert(hostname, ipAddress, apiServer, caFile, caKeyFile, certFile, keyFile, kubeconfigFile, kubeProxyConfigFile, outputDir,
-				country, state, locality, organization, orgUnit)
+				country, state, locality, organization, orgUnit, clusterCIDR, kubeletDataDir, generateServiceFiles)
 		},
 	}
 
@@ -79,6 +94,9 @@ Examples:
 	genCertCmd.Flags().StringVar(&locality, "locality", "XS", "Locality name for certificate subject")
 	genCertCmd.Flags().StringVar(&organization, "organization", "system:nodes", "Organization name for certificate subject")
 	genCertCmd.Flags().StringVar(&orgUnit, "org-unit", "System", "Organizational unit for certificate subject")
+	genCertCmd.Flags().StringVar(&clusterCIDR, "cluster-cidr", "200.20.0.0/18", "Cluster CIDR for kube-proxy configuration (auto-detected from /var/lib/kube-proxy/kube-proxy-config.yaml)")
+	genCertCmd.Flags().StringVar(&kubeletDataDir, "kubelet-data-dir", "/data/kubelet", "Kubelet data directory (auto-detected from /etc/systemd/system/kubelet.service)")
+	genCertCmd.Flags().BoolVar(&generateServiceFiles, "generate-service-files", true, "Generate kubelet.service and kube-proxy-config.yaml files")
 
 	genCertCmd.MarkFlagRequired("hostname")
 	genCertCmd.MarkFlagRequired("ip")
@@ -86,9 +104,77 @@ Examples:
 	return genCertCmd
 }
 
+// KubeProxyConfig represents the structure of kube-proxy-config.yaml
+type KubeProxyConfig struct {
+	ClusterCIDR string `yaml:"clusterCIDR"`
+}
+
+// readClusterCIDRFromConfig reads the clusterCIDR from the local kube-proxy-config.yaml file
+func readClusterCIDRFromConfig(configPath string) (string, error) {
+	// Check if file exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		klog.V(2).Infof("Kube-proxy config file not found at %s, using default", configPath)
+		return "", nil
+	}
+
+	// Read the file
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read kube-proxy config file: %v", err)
+	}
+
+	// Parse YAML
+	var config KubeProxyConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return "", fmt.Errorf("failed to parse kube-proxy config YAML: %v", err)
+	}
+
+	if config.ClusterCIDR != "" {
+		klog.V(2).Infof("Read clusterCIDR from %s: %s", configPath, config.ClusterCIDR)
+		return config.ClusterCIDR, nil
+	}
+
+	return "", nil
+}
+
+// readKubeletDataDirFromService reads the kubelet data directory from the local kubelet.service file
+func readKubeletDataDirFromService(servicePath string) (string, error) {
+	// Check if file exists
+	if _, err := os.Stat(servicePath); os.IsNotExist(err) {
+		klog.V(2).Infof("Kubelet service file not found at %s, using default", servicePath)
+		return "", nil
+	}
+
+	// Read the file
+	file, err := os.Open(servicePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open kubelet service file: %v", err)
+	}
+	defer file.Close()
+
+	// Regular expression to match --root-dir parameter
+	rootDirRegex := regexp.MustCompile(`--root-dir[=\s]+([^\s\\]+)`)
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if matches := rootDirRegex.FindStringSubmatch(line); len(matches) > 1 {
+			dataDir := strings.TrimSpace(matches[1])
+			klog.V(2).Infof("Read kubelet data directory from %s: %s", servicePath, dataDir)
+			return dataDir, nil
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("failed to read kubelet service file: %v", err)
+	}
+
+	return "", nil
+}
+
 // generateKubeletCert generates kubelet certificate, key, and kubeconfig files
 func generateKubeletCert(hostname, ipAddress, apiServer, caFile, caKeyFile, certFile, keyFile, kubeconfigFile, kubeProxyConfigFile, outputDir,
-	country, state, locality, organization, orgUnit string) error {
+	country, state, locality, organization, orgUnit, clusterCIDR, kubeletDataDir string, generateServiceFiles bool) error {
 
 	// Show warning if using default API server address
 	if apiServer == "https://127.0.0.1:6443" {
@@ -96,8 +182,34 @@ func generateKubeletCert(hostname, ipAddress, apiServer, caFile, caKeyFile, cert
 		klog.Warningf("Please double-check if this is the correct API server address for your cluster")
 	}
 
+	// Auto-detect clusterCIDR from local kube-proxy config if not provided or using default
+	if clusterCIDR == "200.20.0.0/18" {
+		if detectedCIDR, err := readClusterCIDRFromConfig("/var/lib/kube-proxy/kube-proxy-config.yaml"); err != nil {
+			klog.Warningf("Failed to read clusterCIDR from local config: %v", err)
+			klog.Infof("Using default clusterCIDR: %s", clusterCIDR)
+		} else if detectedCIDR != "" {
+			clusterCIDR = detectedCIDR
+			klog.Infof("Auto-detected clusterCIDR from local config: %s", clusterCIDR)
+		} else {
+			klog.Infof("Using default clusterCIDR: %s", clusterCIDR)
+		}
+	}
+
+	// Auto-detect kubelet data directory from local kubelet service if not provided or using default
+	if kubeletDataDir == "/data/kubelet" {
+		if detectedDataDir, err := readKubeletDataDirFromService("/etc/systemd/system/kubelet.service"); err != nil {
+			klog.Warningf("Failed to read kubelet data directory from local service: %v", err)
+			klog.Infof("Using default kubelet data directory: %s", kubeletDataDir)
+		} else if detectedDataDir != "" {
+			kubeletDataDir = detectedDataDir
+			klog.Infof("Auto-detected kubelet data directory from local service: %s", kubeletDataDir)
+		} else {
+			klog.Infof("Using default kubelet data directory: %s", kubeletDataDir)
+		}
+	}
+
 	// Determine output paths
-	var finalCertFile, finalKeyFile, finalKubeconfigFile, finalKubeProxyConfigFile string
+	var finalCertFile, finalKeyFile, finalKubeconfigFile, finalKubeProxyConfigFile, finalKubeletServiceFile, finalKubeProxyConfigYamlFile string
 	if outputDir != "" {
 		// Ensure output directory exists
 		if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -107,11 +219,15 @@ func generateKubeletCert(hostname, ipAddress, apiServer, caFile, caKeyFile, cert
 		finalKeyFile = filepath.Join(outputDir, "kubelet-key.pem")
 		finalKubeconfigFile = filepath.Join(outputDir, "kubelet.kubeconfig")
 		finalKubeProxyConfigFile = filepath.Join(outputDir, "kube-proxy.kubeconfig")
+		finalKubeletServiceFile = filepath.Join(outputDir, "kubelet.service")
+		finalKubeProxyConfigYamlFile = filepath.Join(outputDir, "kube-proxy-config.yaml")
 	} else {
 		finalCertFile = certFile
 		finalKeyFile = keyFile
 		finalKubeconfigFile = kubeconfigFile
 		finalKubeProxyConfigFile = kubeProxyConfigFile
+		finalKubeletServiceFile = "/etc/systemd/system/kubelet.service"
+		finalKubeProxyConfigYamlFile = "/var/lib/kube-proxy/kube-proxy-config.yaml"
 
 		// Ensure output directories exist
 		certDir := filepath.Dir(finalCertFile)
@@ -219,11 +335,34 @@ func generateKubeletCert(hostname, ipAddress, apiServer, caFile, caKeyFile, cert
 		klog.Warningf("Failed to set kube-proxy kubeconfig permissions: %v", err)
 	}
 
-	klog.Infof("Successfully generated kubelet certificate and kubeconfig files:")
-	klog.Infof("  Certificate: %s", finalCertFile)
-	klog.Infof("  Private Key: %s", finalKeyFile)
-	klog.Infof("  Kubelet Kubeconfig: %s", finalKubeconfigFile)
-	klog.Infof("  Kube-proxy Kubeconfig: %s", finalKubeProxyConfigFile)
+	// Generate service files if requested
+	if generateServiceFiles {
+		// Generate kubelet.service file
+		klog.V(2).Infof("Generating kubelet.service file...")
+		if err := generateKubeletService(finalKubeletServiceFile, hostname, ipAddress, kubeletDataDir); err != nil {
+			return fmt.Errorf("failed to generate kubelet.service: %v", err)
+		}
+
+		// Generate kube-proxy-config.yaml file
+		klog.V(2).Infof("Generating kube-proxy-config.yaml file...")
+		if err := generateKubeProxyConfigYaml(finalKubeProxyConfigYamlFile, hostname, clusterCIDR); err != nil {
+			return fmt.Errorf("failed to generate kube-proxy-config.yaml: %v", err)
+		}
+
+		klog.Infof("Successfully generated kubelet certificate, kubeconfig, and service files:")
+		klog.Infof("  Certificate: %s", finalCertFile)
+		klog.Infof("  Private Key: %s", finalKeyFile)
+		klog.Infof("  Kubelet Kubeconfig: %s", finalKubeconfigFile)
+		klog.Infof("  Kube-proxy Kubeconfig: %s", finalKubeProxyConfigFile)
+		klog.Infof("  Kubelet Service: %s", finalKubeletServiceFile)
+		klog.Infof("  Kube-proxy Config: %s", finalKubeProxyConfigYamlFile)
+	} else {
+		klog.Infof("Successfully generated kubelet certificate and kubeconfig files:")
+		klog.Infof("  Certificate: %s", finalCertFile)
+		klog.Infof("  Private Key: %s", finalKeyFile)
+		klog.Infof("  Kubelet Kubeconfig: %s", finalKubeconfigFile)
+		klog.Infof("  Kube-proxy Kubeconfig: %s", finalKubeProxyConfigFile)
+	}
 
 	// Verify certificate
 	klog.V(2).Infof("Verifying generated certificate...")
@@ -416,4 +555,76 @@ func backupExistingFiles(certFile, keyFile, kubeconfigFile, kubeProxyConfigFile 
 	}
 
 	return nil
+}
+
+// generateKubeletService creates the kubelet.service systemd unit file
+func generateKubeletService(serviceFile, hostname, ipAddress, kubeletDataDir string) error {
+	serviceContent := fmt.Sprintf(`[Unit]
+Description=Kubernetes Kubelet
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+WorkingDirectory=/var/lib/kubelet
+ExecStartPre=/bin/mount -o remount,rw '/sys/fs/cgroup'
+ExecStart=/opt/kube/bin/kubelet \
+  --config=/var/lib/kubelet/config.yaml \
+  --container-runtime-endpoint=unix:///run/containerd/containerd.sock \
+  --hostname-override=%s \
+  --node-ip=%s \
+  --kubeconfig=/etc/kubernetes/kubelet.kubeconfig \
+  --root-dir=%s \
+  --v=2
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+`, hostname, ipAddress, kubeletDataDir)
+
+	// Ensure directory exists
+	serviceDir := filepath.Dir(serviceFile)
+	if err := os.MkdirAll(serviceDir, 0755); err != nil {
+		return fmt.Errorf("failed to create service directory: %v", err)
+	}
+
+	return os.WriteFile(serviceFile, []byte(serviceContent), 0644)
+}
+
+// generateKubeProxyConfigYaml creates the kube-proxy-config.yaml configuration file
+func generateKubeProxyConfigYaml(configFile, hostname, clusterCIDR string) error {
+	configContent := fmt.Sprintf(`kind: KubeProxyConfiguration
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+bindAddress: 0.0.0.0
+clientConnection:
+  kubeconfig: "/etc/kubernetes/kube-proxy.kubeconfig"
+# 根据clusterCIDR 判断集群内部和外部流量，配置clusterCIDR选项后，kube-proxy 会对访问 Service IP 的请求做 SNAT
+clusterCIDR: "%s"
+conntrack:
+  maxPerCore: 32768
+  min: 131072
+  tcpCloseWaitTimeout: 1h0m0s
+  tcpEstablishedTimeout: 24h0m0s
+healthzBindAddress: 0.0.0.0:10256
+# hostnameOverride 值必须与 kubelet 的对应一致，否则 kube-proxy 启动后会找不到该 Node，从而不会创建任何 iptables 规则
+hostnameOverride: "%s"
+metricsBindAddress: 0.0.0.0:10249
+mode: "ipvs"
+ipvs:
+  excludeCIDRs: null
+  minSyncPeriod: 0s
+  scheduler: ""
+  strictARP: False
+  syncPeriod: 30s
+  tcpFinTimeout: 0s
+  tcpTimeout: 0s
+  udpTimeout: 0s
+`, clusterCIDR, hostname)
+
+	// Ensure directory exists
+	configDir := filepath.Dir(configFile)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %v", err)
+	}
+
+	return os.WriteFile(configFile, []byte(configContent), 0644)
 }

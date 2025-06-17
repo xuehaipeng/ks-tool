@@ -24,10 +24,11 @@ This guide describes how to add new nodes to an existing Kubernetes cluster usin
   - `containerd-1.7.20-linux-loong64.tar.gz`
   - `kubernetes-node-linux-loong64.tar.gz`
   - Offline container images: `pause.tar.gz`, `cilium.tar.gz`, `k8s-dns-node-cache.tar.gz`
-  - Configuration files: `containerd_config.toml`, `containerd.service`, `kubelet.service`, `kube-proxy.service`
-  - Kubelet configuration: `kubelet_config.yaml`, `kube-proxy-config.yaml`
+  - Configuration files: `containerd_config.toml`, `containerd.service`, `kube-proxy.service`
+  - Kubelet configuration: `kubelet_config.yaml`
   - System configuration: `/etc/sysctl.d/95-k8s-sysctl.conf` (from master node)
   - RBAC configuration: `node-rbac.yaml` (to be applied on master node)
+  - **Note**: `kubelet.service` and `kube-proxy-config.yaml` are now generated automatically by the `ks gencert` command with node-specific hostname and IP settings
 
 ## Step 1: Apply Node RBAC Configuration
 
@@ -206,21 +207,29 @@ tar -xzvpf ../kubernetes-node-linux-loong64.tar.gz
 ls -la kubernetes/node/bin/
 ```
 
-## Step 7: Generate Certificates for Each Node
+## Step 7: Generate Certificates and Service Files for Each Node
 
-For each new node, generate kubelet certificates and kubeconfig files:
+For each new node, generate kubelet certificates, kubeconfig files, and service configuration files. The `ks gencert` command automatically detects the cluster CIDR and kubelet data directory from the local master node configuration:
 
 ```bash
-# Generate certificates for worker-1 (replace with actual hostname and IP)
+# Generate certificates and service files for worker-1 (auto-detects cluster CIDR and kubelet data dir)
 ks gencert --hostname worker-1 --ip 192.168.1.100 --apiserver https://192.168.1.10:6443 --output-dir ./certs/worker-1
 
-# Generate certificates for worker-2 (repeat for each node)
+# Generate certificates and service files for worker-2 (repeat for each node)
 ks gencert --hostname worker-2 --ip 192.168.1.101 --apiserver https://192.168.1.10:6443 --output-dir ./certs/worker-2
 
-# Verify generated certificates
+# Optional: Override auto-detected values if needed
+# ks gencert --hostname worker-3 --ip 192.168.1.102 --apiserver https://192.168.1.10:6443 --output-dir ./certs/worker-3 --cluster-cidr 10.244.0.0/16 --kubelet-data-dir /var/lib/kubelet
+
+# Verify generated files
 ls -la ./certs/worker-1/
-# Should contain: kubelet.pem, kubelet-key.pem, kubelet.kubeconfig, kube-proxy.kubeconfig
+# Should contain: kubelet.pem, kubelet-key.pem, kubelet.kubeconfig, kube-proxy.kubeconfig, kubelet.service, kube-proxy-config.yaml
 ```
+
+**Auto-Detection Features:**
+- **Cluster CIDR**: Automatically read from `/var/lib/kube-proxy/kube-proxy-config.yaml` on the master node
+- **Kubelet Data Directory**: Automatically read from `/etc/systemd/system/kubelet.service` on the master node
+- **Fallback**: Uses default values if local configuration files are not found
 
 ## Step 8: Deploy Kubernetes Components
 
@@ -243,29 +252,31 @@ ks exec "chmod +x /opt/kube/bin/*" --groups new-nodes
 # Copy base Kubernetes configuration from master
 ks scp /etc/kubernetes/ --groups new-nodes --remote-path /etc/kubernetes --recursive
 
-# Copy kubelet and kube-proxy configuration files
+# Copy kubelet configuration file (kube-proxy-config.yaml is generated per-node)
 ks scp kubelet_config.yaml --groups new-nodes --remote-path /root/kubelet_config.yaml
-ks scp kube-proxy-config.yaml --groups new-nodes --remote-path /root/kube-proxy-config.yaml
-ks scp kubelet.service --groups new-nodes --remote-path /root/kubelet.service
 ks scp kube-proxy.service --groups new-nodes --remote-path /root/kube-proxy.service
 ```
 
-### 8.3 Deploy Node-Specific Certificates
+### 8.3 Deploy Node-Specific Certificates and Service Files
 
-Deploy certificates for each node individually:
+Deploy certificates and service configuration files for each node individually:
 
 ```bash
-# Deploy certificates for worker-1
+# Deploy certificates and service files for worker-1
 ks scp ./certs/worker-1/kubelet.pem --hosts 192.168.1.100 --remote-path /etc/kubernetes/ssl/kubelet.pem
 ks scp ./certs/worker-1/kubelet-key.pem --hosts 192.168.1.100 --remote-path /etc/kubernetes/ssl/kubelet-key.pem
 ks scp ./certs/worker-1/kubelet.kubeconfig --hosts 192.168.1.100 --remote-path /etc/kubernetes/kubelet.kubeconfig
 ks scp ./certs/worker-1/kube-proxy.kubeconfig --hosts 192.168.1.100 --remote-path /etc/kubernetes/kube-proxy.kubeconfig
+ks scp ./certs/worker-1/kubelet.service --hosts 192.168.1.100 --remote-path /etc/systemd/system/kubelet.service
+ks scp ./certs/worker-1/kube-proxy-config.yaml --hosts 192.168.1.100 --remote-path /var/lib/kube-proxy/kube-proxy-config.yaml
 
-# Deploy certificates for worker-2
+# Deploy certificates and service files for worker-2
 ks scp ./certs/worker-2/kubelet.pem --hosts 192.168.1.101 --remote-path /etc/kubernetes/ssl/kubelet.pem
 ks scp ./certs/worker-2/kubelet-key.pem --hosts 192.168.1.101 --remote-path /etc/kubernetes/ssl/kubelet-key.pem
 ks scp ./certs/worker-2/kubelet.kubeconfig --hosts 192.168.1.101 --remote-path /etc/kubernetes/kubelet.kubeconfig
 ks scp ./certs/worker-2/kube-proxy.kubeconfig --hosts 192.168.1.101 --remote-path /etc/kubernetes/kube-proxy.kubeconfig
+ks scp ./certs/worker-2/kubelet.service --hosts 192.168.1.101 --remote-path /etc/systemd/system/kubelet.service
+ks scp ./certs/worker-2/kube-proxy-config.yaml --hosts 192.168.1.101 --remote-path /var/lib/kube-proxy/kube-proxy-config.yaml
 
 # Repeat for additional nodes...
 ```
@@ -276,7 +287,7 @@ ks scp ./certs/worker-2/kube-proxy.kubeconfig --hosts 192.168.1.101 --remote-pat
 # Create kubelet directories and install configuration
 ks exec "mkdir -p /var/lib/kubelet/" --groups new-nodes
 ks exec "cp /root/kubelet_config.yaml /var/lib/kubelet/config.yaml" --groups new-nodes
-ks exec "cp /root/kubelet.service /etc/systemd/system/kubelet.service" --groups new-nodes
+# Note: kubelet.service is now deployed per-node in step 8.3 with correct hostname/IP
 
 # Set proper permissions for certificates
 ks exec "chmod 600 /etc/kubernetes/ssl/kubelet-key.pem /etc/kubernetes/kubelet.kubeconfig" --groups new-nodes
@@ -297,7 +308,7 @@ ks exec "systemctl status kubelet --no-pager" --groups new-nodes
 ```bash
 # Create kube-proxy directories and install configuration
 ks exec "mkdir -p /var/lib/kube-proxy/" --groups new-nodes
-ks exec "cp /root/kube-proxy-config.yaml /var/lib/kube-proxy/kube-proxy-config.yaml" --groups new-nodes
+# Note: kube-proxy-config.yaml is now deployed per-node in step 8.3 with correct hostname/cluster CIDR
 ks exec "cp /root/kube-proxy.service /etc/systemd/system/kube-proxy.service" --groups new-nodes
 
 # Set proper permissions for kube-proxy kubeconfig
@@ -446,19 +457,22 @@ NODES=(
 )
 
 API_SERVER="https://192.168.1.10:6443"
+# Note: cluster CIDR and kubelet data directory are auto-detected from local master node config
 
 for node_info in "${NODES[@]}"; do
     hostname=$(echo $node_info | cut -d: -f1)
     ip=$(echo $node_info | cut -d: -f2)
     
-    echo "Generating certificates for $hostname ($ip)..."
+    echo "Generating certificates and service files for $hostname ($ip)..."
     ks gencert --hostname $hostname --ip $ip --apiserver $API_SERVER --output-dir ./certs/$hostname
     
-    echo "Deploying certificates for $hostname..."
+    echo "Deploying certificates and service files for $hostname..."
     ks scp ./certs/$hostname/kubelet.pem --hosts $ip --remote-path /etc/kubernetes/ssl/kubelet.pem
     ks scp ./certs/$hostname/kubelet-key.pem --hosts $ip --remote-path /etc/kubernetes/ssl/kubelet-key.pem
     ks scp ./certs/$hostname/kubelet.kubeconfig --hosts $ip --remote-path /etc/kubernetes/kubelet.kubeconfig
     ks scp ./certs/$hostname/kube-proxy.kubeconfig --hosts $ip --remote-path /etc/kubernetes/kube-proxy.kubeconfig
+    ks scp ./certs/$hostname/kubelet.service --hosts $ip --remote-path /etc/systemd/system/kubelet.service
+    ks scp ./certs/$hostname/kube-proxy-config.yaml --hosts $ip --remote-path /var/lib/kube-proxy/kube-proxy-config.yaml
     
     echo "Labeling node $hostname..."
     kubectl label node $hostname kubernetes.io/role=node
@@ -480,8 +494,9 @@ echo "All nodes added successfully!"
 This guide provides a comprehensive approach to adding Kubernetes nodes using the `ks` tool, which significantly simplifies the process by:
 
 - Automating file distribution across multiple nodes
-- Generating proper certificates and kubeconfig files
+- Generating proper certificates and kubeconfig files with auto-detection of cluster configuration
 - Providing concurrent execution for faster deployment
 - Offering detailed logging and troubleshooting capabilities
+- Auto-detecting cluster CIDR and kubelet data directory from master node configuration
 
-The `ks` tool's ad-hoc host support and smart credential lookup make it particularly well-suited for Kubernetes cluster management tasks.
+The `ks` tool's ad-hoc host support, smart credential lookup, and intelligent configuration detection make it particularly well-suited for Kubernetes cluster management tasks.
