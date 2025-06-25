@@ -8,6 +8,7 @@ A command-line tool for executing commands and copying files to groups of remote
 - Copy files and directories to multiple remote hosts via SCP as root user
 - Extract SSH information from Ansible inventory files and convert to hosts.yaml format
 - Generate kubelet certificates and kubeconfig files for Kubernetes nodes
+- Update kubelet DNS configuration with cluster DNS service IP
 - Organize hosts into groups for easy management
 - Support for different SSH configurations per host (username, password, sudo password, port)
 - Ad-hoc host support with smart credential lookup from configuration files
@@ -231,6 +232,40 @@ The extract command will:
 - Skip special Ansible groups (add_*, del_*)
 - Generate a hosts.yaml file compatible with ks-tool
 
+### Update Kubelet DNS Configuration
+
+Update kubelet DNS configuration by querying the cluster DNS service and updating kubelet config files on remote hosts:
+
+```bash
+# Update DNS config on web-servers group (uses kube-dns service by default)
+ks dns-update --groups web-servers
+
+# Update DNS config on specific hosts
+ks dns-update --hosts 192.168.1.10,192.168.1.11 --user root --pass password123
+
+# Update with custom kubelet config path
+ks dns-update --groups web-servers --kubelet-config /custom/path/kubelet/config.yaml
+
+# Update with custom DNS service name and namespace (for CoreDNS)
+ks dns-update --groups web-servers --dns-service coredns --dns-namespace kube-system
+
+# Update multiple groups
+ks dns-update --groups web-servers,app-servers
+```
+
+This command will:
+1. Query DNS service IP using `kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}'`
+2. Update `/var/lib/kubelet/config.yaml` on specified hosts with the DNS service IP
+3. Backup the original config file before making changes
+4. Restart kubelet service to apply the changes
+5. Verify kubelet is running after restart
+
+The command automatically handles:
+- Querying the correct DNS service IP from the cluster
+- Backing up existing kubelet config files
+- Updating the `clusterDNS` field in the YAML configuration
+- Restarting services to apply changes
+
 ### Command Line Options
 
 Global options:
@@ -275,6 +310,17 @@ GenCert command options:
 - `--locality`: Locality name for certificate subject (default: XS)
 - `--organization`: Organization name for certificate subject (default: system:nodes)
 - `--org-unit`: Organizational unit for certificate subject (default: System)
+
+DNS Update command options:
+- `--groups, -g`: Host groups to update DNS config on (can be combined with --hosts)
+- `--hosts, -H`: Individual hosts to update DNS config on (can be combined with --groups)
+- `--user, -u`: SSH username for ad-hoc hosts
+- `--pass, -p`: SSH password for ad-hoc hosts
+- `--sudo-pass`: Sudo password for ad-hoc hosts
+- `--port`: SSH port for ad-hoc hosts (default: 22)
+- `--kubelet-config`: Path to kubelet config file on remote hosts (default: /var/lib/kubelet/config.yaml)
+- `--dns-service`: Name of the DNS service to query (default: kube-dns)
+- `--dns-namespace`: Namespace of the DNS service (default: kube-system)
 
 ### Logging
 
@@ -326,6 +372,12 @@ ks extract -i /etc/ansible/inventory -o k8s-hosts.yaml
 
 # Generate kubelet certificates and kubeconfig files for new nodes
 ks gencert --hostname worker-3 --ip 192.168.1.103 --apiserver https://192.168.1.100:6443 --output-dir /tmp/worker-3-certs
+
+# Update kubelet DNS configuration on worker nodes
+ks dns-update --groups worker-nodes
+
+# Update DNS configuration on specific hosts with custom service
+ks dns-update --hosts 192.168.1.100,192.168.1.101 --dns-service coredns --user root --pass password123
 
 # Then use the converted hosts file for operations
 ks exec "kubectl get nodes" --groups kube_master --config k8s-hosts.yaml

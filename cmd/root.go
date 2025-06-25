@@ -18,7 +18,8 @@ func NewRootCmd() *cobra.Command {
 - Execute shell commands on multiple hosts
 - Copy files to multiple hosts via SCP
 - Manage groups of hosts with different configurations
-- Generate kubelet certificates for Kubernetes nodes`,
+- Generate kubelet certificates for Kubernetes nodes
+- Update kubelet DNS configuration with cluster DNS service IP`,
 		Version: version.GetShortVersion(),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Show help when no arguments are provided
@@ -34,6 +35,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(NewScpCmd())
 	rootCmd.AddCommand(NewExtractCmd())
 	rootCmd.AddCommand(NewGenCertCmd())
+	rootCmd.AddCommand(NewDNSCmd())
 	rootCmd.AddCommand(NewVersionCmd())
 
 	return rootCmd
