@@ -23,7 +23,7 @@ This guide describes how to add new nodes to an existing Kubernetes cluster usin
 - Required artifacts in the current directory:
   - `containerd-1.7.20-linux-loong64.tar.gz`
   - `kubernetes-node-linux-loong64.tar.gz`
-  - Offline container images: `pause.tar.gz`, `cilium.tar.gz`, `k8s-dns-node-cache.tar.gz`
+  - Offline container images: `pause.tar.gz`, `flannel-loong64.tar.gz`, `flannel-cni-plugin-loong64.tar.gz`
   - Configuration files: `containerd_config.toml`, `containerd.service`, `kube-proxy.service`
   - Kubelet configuration: `kubelet_config.yaml`
   - System configuration: `/etc/sysctl.d/95-k8s-sysctl.conf` (from master node)
@@ -154,8 +154,8 @@ ks scp containerd.service --groups new-nodes --remote-path /root/containerd.serv
 
 # Copy container images
 ks scp pause.tar.gz --groups new-nodes --remote-path /root/pause.tar.gz
-ks scp cilium.tar.gz --groups new-nodes --remote-path /root/cilium.tar.gz
-ks scp k8s-dns-node-cache.tar.gz --groups new-nodes --remote-path /root/k8s-dns-node-cache.tar.gz
+ks scp flannel-loong64.tar.gz --groups new-nodes --remote-path /root/flannel-loong64.tar.gz
+ks scp flannel-cni-plugin-loong64.tar.gz --groups new-nodes --remote-path /root/flannel-cni-plugin-loong64.tar.gz
 ```
 
 ### 5.2 Install and Configure Containerd
@@ -174,19 +174,17 @@ ks exec "cp /etc/systemd/system/containerd.service /etc/systemd/system/container
 # Import pause image directly from compressed archive
 ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/pause.tar.gz" --groups new-nodes
 
-# Import cilium image directly from compressed archive
-ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/cilium.tar.gz" --groups new-nodes
-
-# Import DNS node cache image directly from compressed archive
-ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/k8s-dns-node-cache.tar.gz" --groups new-nodes
+# Import flannel image directly from compressed archive
+ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/flannel-loong64.tar.gz" --groups new-nodes
+ks exec "/opt/kube/bin/ctr -n k8s.io i import /root/flannel-cni-plugin-loong64.tar.gz" --groups new-nodes
 
 # Verify imported images (should show the correct tags already)
 ks exec "/opt/kube/bin/ctr -n k8s.io i ls" --groups new-nodes
 
 # Expected images after import:
 # - registry.tecorigin.local:5000/easzlab/pause:3.9
-# - registry.tecorigin.local:5000/cilium/cilium:v1.15.5  
-# - registry.tecorigin.io:5443/loong64/easzlab/k8s-dns-node-cache:1.22.28
+# - registry.tecorigin.io:5443/infra/flannel/flannel:v0.22.1 
+# - registry.tecorigin.io:5443/infra/flannel/flannel-cni-plugin:v1.4.0-flannel1 
 
 # Enable and start containerd service
 ks exec "systemctl daemon-reload && systemctl enable containerd && systemctl restart containerd" --groups new-nodes
@@ -296,6 +294,9 @@ ks exec "chmod 644 /etc/kubernetes/ssl/kubelet.pem" --groups new-nodes
 # Disable swap (required for kubelet)
 ks exec "swapoff -a && sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab" --groups new-nodes
 
+# (Optional) Change kubelet's DNS setting to use kube-dns instead of node-local-dns
+ks dns-update --groups new-nodes --kubelet-config /custom/path/kubelet/config.yaml
+
 # Enable and start kubelet
 ks exec "systemctl daemon-reload && systemctl enable kubelet && systemctl restart kubelet" --groups new-nodes
 
@@ -360,27 +361,14 @@ ks exec "journalctl -u kube-proxy --no-pager -l" --groups new-nodes
 
 ## Step 12: Post-Installation Verification
 
-### 12.1 Test Pod Scheduling
-
-```bash
-# Create a test deployment to verify nodes can schedule pods
-kubectl create deployment test-nginx --image=nginx --replicas=3
-
-# Check if pods are scheduled on new nodes
-kubectl get pods -o wide
-
-# Clean up test deployment
-kubectl delete deployment test-nginx
-```
-
-### 12.2 Verify Network Connectivity
+### 12.1 Verify Network Connectivity
 
 ```bash
 # Test network connectivity between nodes
 ks exec "ping -c 3 192.168.1.10" --groups new-nodes  # Ping master node
 
 # Check if CNI is working properly
-kubectl get pods -n kube-system -o wide | grep cilium
+kubectl get pods -n kube-system -o wide | grep flannel
 ```
 
 ## Troubleshooting
