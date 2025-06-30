@@ -9,6 +9,7 @@ A command-line tool for executing commands and copying files to groups of remote
 - Extract SSH information from Ansible inventory files and convert to hosts.yaml format
 - Generate kubelet certificates and kubeconfig files for Kubernetes nodes
 - Update kubelet DNS configuration with cluster DNS service IP
+- Jump to interactive SSH sessions on remote hosts using stored credentials
 - Organize hosts into groups for easy management
 - Support for different SSH configurations per host (username, password, sudo password, port)
 - Ad-hoc host support with smart credential lookup from configuration files
@@ -273,6 +274,35 @@ The command automatically handles:
 - Updating the `clusterDNS` field in the YAML configuration
 - Restarting services to apply changes
 
+### Jump to Interactive SSH Sessions
+
+Start an interactive SSH session to a remote host using credentials from your hosts.yaml file:
+
+```bash
+# Jump to first host in a group
+ks jump --groups web-servers
+
+# Jump to specific host in a group (0-indexed)
+ks jump --groups web-servers --host-index 1
+
+# Jump to specific host by IP
+ks jump --hosts 192.168.1.10
+
+# Jump with explicit credentials (override config)
+ks jump --hosts 192.168.1.10 --user admin --pass password123
+
+# Jump using smart credential lookup (will lookup from hosts.yaml)
+ks jump --hosts 192.168.1.10
+```
+
+The jump command provides:
+- Interactive shell access as root user (using sudo if needed)
+- Automatic credential lookup from hosts.yaml configuration
+- Support for both group-based and individual host connections
+- Host selection within groups using --host-index
+- Override credentials when needed for ad-hoc connections
+- Proper terminal handling for interactive sessions
+
 ### Command Line Options
 
 Global options:
@@ -328,6 +358,15 @@ DNS Update command options:
 - `--kubelet-config`: Path to kubelet config file on remote hosts (default: /var/lib/kubelet/config.yaml)
 - `--dns-service`: Name of the DNS service to query (default: kube-dns)
 - `--dns-namespace`: Namespace of the DNS service (default: kube-system)
+
+Jump command options:
+- `--groups, -g`: Host group to jump to (only one group allowed)
+- `--hosts, -H`: Individual host to jump to (only one host allowed)
+- `--host-index`: Index of host to connect to within a group (0-based, default: 0)
+- `--user, -u`: SSH username for ad-hoc host (will lookup from config if not provided)
+- `--pass, -p`: SSH password for ad-hoc host (will lookup from config if not provided)
+- `--sudo-pass`: Sudo password for ad-hoc host (will lookup from config if not provided)
+- `--port`: SSH port for ad-hoc host (default: 22)
 
 ### Logging
 
@@ -385,6 +424,15 @@ ks dns-update --groups worker-nodes
 
 # Update DNS configuration on specific hosts with custom service
 ks dns-update --hosts 192.168.1.100,192.168.1.101 --dns-service coredns --user root --pass password123
+
+# Jump to an interactive SSH session on web servers
+ks jump --groups web-servers
+
+# Jump to specific host in a group
+ks jump --groups web-servers --host-index 2
+
+# Jump to a specific host by IP
+ks jump --hosts 192.168.1.10
 
 # Then use the converted hosts file for operations
 ks exec "kubectl get nodes" --groups kube_master --config k8s-hosts.yaml

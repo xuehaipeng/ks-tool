@@ -94,6 +94,45 @@ func shellQuote(command string) string {
 	return fmt.Sprintf("'%s'", escaped)
 }
 
+// StartInteractiveSession starts an interactive SSH session
+func (c *Client) StartInteractiveSession() error {
+	session, err := c.client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %v", err)
+	}
+	defer session.Close()
+
+	// Set up terminal
+	session.Stdin = os.Stdin
+	session.Stdout = os.Stdout
+	session.Stderr = os.Stderr
+
+	// Request a pty
+	if err := session.RequestPty("xterm-256color", 80, 24, ssh.TerminalModes{}); err != nil {
+		return fmt.Errorf("failed to request pty: %v", err)
+	}
+
+	// Start shell with appropriate privilege escalation
+	var shell string
+	if c.host.SudoPassword != "" {
+		// Use sudo with password to get root shell - properly escape the password
+		shell = fmt.Sprintf("echo %s | sudo -S -i", shellQuote(c.host.SudoPassword))
+	} else {
+		// Use sudo without password to get root shell
+		shell = "sudo -i"
+	}
+
+	klog.V(2).Infof("Starting interactive session on %s as root", c.host.IP)
+
+	// Start the shell
+	if err := session.Start(shell); err != nil {
+		return fmt.Errorf("failed to start shell: %v", err)
+	}
+
+	// Wait for session to finish
+	return session.Wait()
+}
+
 // CopyPath copies a local file or directory to the remote host
 // If localPath is a directory, it will be copied recursively
 func (c *Client) CopyPath(localPath, remotePath string) error {
