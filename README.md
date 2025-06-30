@@ -188,7 +188,10 @@ ks scp script.sh --groups web-servers --hosts 192.168.1.50 --user admin --remote
 Convert Ansible inventory files to hosts.yaml format:
 
 ```bash
-# Extract SSH information from Ansible inventory
+# Extract using default inventory file (/etc/kubeasz/clusters/tecoai/hosts)
+ks extract
+
+# Extract from custom inventory file
 ks extract -i /path/to/ansible/inventory -o hosts.yaml
 
 # Extract to custom output file
@@ -328,7 +331,7 @@ SCP command options:
 - `--port`: SSH port for ad-hoc hosts (default: 22)
 
 Extract command options:
-- `--input, -i`: Path to the Ansible inventory file (required)
+- `--input, -i`: Path to the Ansible inventory file (default: /etc/kubeasz/clusters/tecoai/hosts)
 - `--output, -o`: Path to the output hosts.yaml file (default: hosts.yaml)
 
 GenCert command options:

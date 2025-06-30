@@ -26,17 +26,21 @@ This command parses an Ansible inventory file and extracts:
 - SSH connection details (username, password, port, sudo password)
 - Group-level and host-level configurations
 
-Example:
+The command uses a default inventory file path (/etc/kubeasz/clusters/tecoai/hosts).
+If the default file doesn't exist, specify a custom path using --input.
+
+Examples:
+  # Use default inventory file
+  ks extract
+  
+  # Use custom inventory file
   ks extract -i /path/to/ansible/inventory -o hosts.yaml`,
 		RunE: runExtract,
 	}
 
 	// Add flags
-	extractCmd.Flags().StringVarP(&inputFile, "input", "i", "/etc/kubeasz/clusters/tecoai/hosts", "Path to the Ansible inventory file (required)")
+	extractCmd.Flags().StringVarP(&inputFile, "input", "i", "/etc/kubeasz/clusters/tecoai/hosts", "Path to the Ansible inventory file")
 	extractCmd.Flags().StringVarP(&outputFile, "output", "o", "hosts.yaml", "Path to the output hosts.yaml file")
-
-	// Mark input as required
-	extractCmd.MarkFlagRequired("input")
 
 	return extractCmd
 }
@@ -47,6 +51,9 @@ func runExtract(cmd *cobra.Command, args []string) error {
 
 	// Check if input file exists
 	if _, err := os.Stat(inputFile); os.IsNotExist(err) {
+		if inputFile == "/etc/kubeasz/clusters/tecoai/hosts" {
+			return fmt.Errorf("default Ansible inventory file does not exist: %s\nPlease specify an inventory file using --input flag", inputFile)
+		}
 		return fmt.Errorf("input file does not exist: %s", inputFile)
 	}
 

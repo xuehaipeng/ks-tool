@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,6 +96,37 @@ func shellQuote(command string) string {
 	return fmt.Sprintf("'%s'", escaped)
 }
 
+// getTerminalSize tries to get the current terminal size
+func getTerminalSize() (width, height int) {
+	// Default fallback
+	width, height = 120, 30
+
+	// Try to get terminal size using stty
+	if cmd := exec.Command("stty", "size"); cmd != nil {
+		if output, err := cmd.Output(); err == nil {
+			parts := strings.Fields(strings.TrimSpace(string(output)))
+			if len(parts) == 2 {
+				if h, err := strconv.Atoi(parts[0]); err == nil {
+					height = h
+				}
+				if w, err := strconv.Atoi(parts[1]); err == nil {
+					width = w
+				}
+			}
+		}
+	}
+
+	// Ensure reasonable minimums
+	if width < 80 {
+		width = 80
+	}
+	if height < 24 {
+		height = 24
+	}
+
+	return width, height
+}
+
 // StartInteractiveSession starts an interactive SSH session
 func (c *Client) StartInteractiveSession() error {
 	session, err := c.client.NewSession()
@@ -107,14 +140,29 @@ func (c *Client) StartInteractiveSession() error {
 	session.Stdout = os.Stdout
 	session.Stderr = os.Stderr
 
-	// Request a pty
-	if err := session.RequestPty("xterm-256color", 80, 24, ssh.TerminalModes{}); err != nil {
+	// Get terminal size
+	width, height := getTerminalSize()
+
+	// Request a pty with proper terminal modes
+	termModes := ssh.TerminalModes{
+		ssh.ECHO:          0,     // disable echoing (remote will handle echo)
+		ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
+		ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
+		ssh.ICRNL:         1,     // map CR to NL on input
+		ssh.OPOST:         1,     // enable output processing
+		ssh.ONLCR:         1,     // map NL to CR-NL on output
+	}
+
+	if err := session.RequestPty("xterm-256color", height, width, termModes); err != nil {
 		return fmt.Errorf("failed to request pty: %v", err)
 	}
 
 	// Start shell with appropriate privilege escalation
 	var shell string
-	if c.host.SudoPassword != "" {
+	if c.host.Username == "root" {
+		// Already connecting as root, start an interactive login shell
+		shell = "TERM=xterm-256color bash --login"
+	} else if c.host.SudoPassword != "" {
 		// Use sudo with password to get root shell - properly escape the password
 		shell = fmt.Sprintf("echo %s | sudo -S -i", shellQuote(c.host.SudoPassword))
 	} else {
@@ -122,7 +170,7 @@ func (c *Client) StartInteractiveSession() error {
 		shell = "sudo -i"
 	}
 
-	klog.V(2).Infof("Starting interactive session on %s as root", c.host.IP)
+	klog.V(2).Infof("Starting interactive session on %s as root (terminal: %dx%d)", c.host.IP, width, height)
 
 	// Start the shell
 	if err := session.Start(shell); err != nil {
