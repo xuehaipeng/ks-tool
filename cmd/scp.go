@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -33,18 +34,26 @@ func NewScpCmd() *cobra.Command {
 You can specify either groups from your hosts.yaml file or individual hosts with connection details.
 Use the --recursive flag to copy directories and their contents recursively.
 
+When the remote path ends with '/', it is treated as a directory and the source file/directory name 
+will be automatically appended to create the full destination path.
+
 Examples:
   # Copy file to groups
   ks scp script.sh --groups web-servers,db-servers --remote-path /tmp/script.sh
   
+  # Copy file to directory (auto-append filename)
+  ks scp ./certs/kubelet.pem --hosts 192.168.1.10 --remote-path /etc/kubernetes/ssl/
+  # Equivalent to: --remote-path /etc/kubernetes/ssl/kubelet.pem
+  
   # Copy directory recursively to groups
   ks scp ./config-dir --groups web-servers --remote-path /etc/myapp --recursive
   
-  # Copy to individual hosts
-  ks scp config.conf --hosts 192.168.1.10,192.168.1.11 --user root --pass password123 --remote-path /etc/config.conf
+  # Copy directory to target directory (auto-append source dir name)
+  ks scp ./deploy --hosts 192.168.1.10 --remote-path /opt/
+  # Equivalent to: --remote-path /opt/deploy
   
-  # Copy directory to individual hosts
-  ks scp ./deploy --hosts 192.168.1.10 --user admin --remote-path /opt/deploy --recursive
+  # Copy to individual hosts with explicit path
+  ks scp config.conf --hosts 192.168.1.10,192.168.1.11 --user root --pass password123 --remote-path /etc/config.conf
   
   # Mix of groups and individual hosts
   ks scp deploy.sh --groups web-servers --hosts 192.168.1.20 --user admin --pass secret --remote-path /tmp/deploy.sh`,
@@ -146,20 +155,31 @@ func copyPathToHost(host config.Host, localPath, remotePath string, recursive bo
 	}
 	defer client.Close()
 
+	// Handle directory-style remote paths (ending with '/')
+	finalRemotePath := remotePath
+	if strings.HasSuffix(remotePath, "/") {
+		// Extract the base name from local path and append to remote directory
+		baseName := filepath.Base(localPath)
+		finalRemotePath = filepath.Join(remotePath, baseName)
+		// Convert to forward slashes for remote Unix systems
+		finalRemotePath = strings.ReplaceAll(finalRemotePath, "\\", "/")
+		klog.V(2).Infof("Remote path ends with '/', using full path: %s", finalRemotePath)
+	}
+
 	if recursive {
-		if err := client.CopyPath(localPath, remotePath); err != nil {
+		if err := client.CopyPath(localPath, finalRemotePath); err != nil {
 			klog.Errorf("Path copy failed on %s: %v", host.IP, err)
 			return err
 		}
 	} else {
-		if err := client.CopyFile(localPath, remotePath); err != nil {
+		if err := client.CopyFile(localPath, finalRemotePath); err != nil {
 			klog.Errorf("File copy failed on %s: %v", host.IP, err)
 			return err
 		}
 	}
 
-	klog.Infof("Copy succeeded on %s: %s -> %s", host.IP, localPath, remotePath)
-	fmt.Printf("Successfully copied %s to %s:%s\n", localPath, host.IP, remotePath)
+	klog.Infof("Copy succeeded on %s: %s -> %s", host.IP, localPath, finalRemotePath)
+	fmt.Printf("Successfully copied %s to %s:%s\n", localPath, host.IP, finalRemotePath)
 
 	return nil
 }

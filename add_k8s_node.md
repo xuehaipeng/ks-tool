@@ -24,10 +24,14 @@ This guide describes how to add new nodes to an existing Kubernetes cluster usin
   - `containerd-1.7.20-linux-loong64.tar.gz`
   - `kubernetes-node-linux-loong64.tar.gz`
   - Offline container images: `pause.tar.gz`, `flannel-loong64.tar.gz`, `flannel-cni-plugin-loong64.tar.gz`
-  - Configuration files: `containerd_config.toml`, `containerd.service`, `kube-proxy.service`
-  - Kubelet configuration: `kubelet_config.yaml`
-  - System configuration: `/etc/sysctl.d/95-k8s-sysctl.conf` (from master node)
   - RBAC configuration: `node-rbac.yaml` (to be applied on master node)
+
+- **Configuration files can be copied from local master node**:
+  - `/etc/containerd/config.toml` - containerd configuration
+  - `/etc/systemd/system/containerd.service` - containerd service file
+  - `/etc/systemd/system/kube-proxy.service` - kube-proxy service file
+  - `/var/lib/kubelet/config.yaml` - kubelet base configuration
+  - `/etc/sysctl.d/95-k8s-sysctl.conf` - system kernel parameters
   - **Note**: `kubelet.service` and `kube-proxy-config.yaml` are now generated automatically by the `ks gencert` command with node-specific hostname and IP settings
 
 ## Step 1: Apply Node RBAC Configuration
@@ -148,9 +152,9 @@ ls -la bin/
 # Copy containerd binaries to target nodes
 ks scp ./bin --groups new-nodes --remote-path /root/bin --recursive
 
-# Copy containerd configuration files
-ks scp containerd_config.toml --groups new-nodes --remote-path /root/containerd_config.toml
-ks scp containerd.service --groups new-nodes --remote-path /root/containerd.service
+# Copy containerd configuration files from local master node
+ks scp /etc/containerd/config.toml --groups new-nodes --remote-path /root/containerd_config.toml
+ks scp /etc/systemd/system/containerd.service --groups new-nodes --remote-path /root/containerd.service
 
 # Copy container images
 ks scp pause.tar.gz --groups new-nodes --remote-path /root/pause.tar.gz
@@ -250,9 +254,9 @@ ks exec "chmod +x /opt/kube/bin/*" --groups new-nodes
 # Copy base Kubernetes configuration from master
 ks scp /etc/kubernetes/ --groups new-nodes --remote-path /etc/kubernetes --recursive
 
-# Copy kubelet configuration file (kube-proxy-config.yaml is generated per-node)
-ks scp kubelet_config.yaml --groups new-nodes --remote-path /root/kubelet_config.yaml
-ks scp kube-proxy.service --groups new-nodes --remote-path /root/kube-proxy.service
+# Copy configuration files from local master node (kube-proxy-config.yaml is generated per-node)
+ks scp /var/lib/kubelet/config.yaml --groups new-nodes --remote-path /root/kubelet_config.yaml
+ks scp /etc/systemd/system/kube-proxy.service --groups new-nodes --remote-path /root/kube-proxy.service
 ```
 
 ### 8.3 Deploy Node-Specific Certificates and Service Files

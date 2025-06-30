@@ -159,14 +159,19 @@ Copy files or directories to remote hosts via SCP. Supports both group-based and
 # Copy file to web-servers group
 ks scp /local/path/to/file.txt --groups web-servers --remote-path /remote/path/file.txt
 
+# Copy file to directory (auto-append filename when path ends with '/')
+ks scp ./certs/kubelet.pem --hosts 192.168.1.10 --remote-path /etc/kubernetes/ssl/
+# Equivalent to: --remote-path /etc/kubernetes/ssl/kubelet.pem
+
 # Copy directory recursively to groups
 ks scp ./config-dir --groups web-servers --remote-path /etc/myapp --recursive
 
+# Copy directory to target directory (auto-append source directory name)
+ks scp ./deploy --hosts 192.168.1.10 --remote-path /opt/
+# Equivalent to: --remote-path /opt/deploy
+
 # Copy to multiple groups
 ks scp script.sh --groups web-servers,app-servers --remote-path /tmp/script.sh
-
-# Copy directory to individual hosts (ad-hoc mode)
-ks scp ./deploy --hosts 192.168.1.10 --user admin --pass password123 --remote-path /opt/deploy --recursive
 
 # Copy to multiple individual hosts
 ks scp config.conf --hosts 192.168.1.10,192.168.1.11 --user root --pass rootpass --remote-path /etc/myapp/config.conf
@@ -174,6 +179,8 @@ ks scp config.conf --hosts 192.168.1.10,192.168.1.11 --user root --pass rootpass
 # Mix groups and individual hosts
 ks scp script.sh --groups web-servers --hosts 192.168.1.50 --user admin --remote-path /tmp/script.sh
 ```
+
+**Directory Path Handling**: When the remote path ends with '/', it is treated as a directory and the source file/directory name is automatically appended to create the full destination path.
 
 ### Extract Ansible Inventory
 
