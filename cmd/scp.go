@@ -27,9 +27,9 @@ func NewScpCmd() *cobra.Command {
 	)
 
 	scpCmd := &cobra.Command{
-		Use:   "scp [local-file-or-directory]",
+		Use:   "scp [local-file-or-directory]...",
 		Short: "Copy files or directories to remote hosts via SCP",
-		Long: `Copy a local file or directory to one or more groups of remote hosts or individual hosts via SCP as root user.
+		Long: `Copy one or more local files or directories to one or more groups of remote hosts or individual hosts via SCP as root user.
 
 You can specify either groups from your hosts.yaml file or individual hosts with connection details.
 Use the --recursive flag to copy directories and their contents recursively.
@@ -41,25 +41,25 @@ Examples:
   # Copy file to groups
   ks scp script.sh --groups web-servers,db-servers --remote-path /tmp/script.sh
   
-  # Copy file to directory (auto-append filename)
-  ks scp ./certs/kubelet.pem --hosts 192.168.1.10 --remote-path /etc/kubernetes/ssl/
-  # Equivalent to: --remote-path /etc/kubernetes/ssl/kubelet.pem
+  # Copy multiple files to directory (auto-append filename)
+  ks scp ./certs/kubelet.pem ./certs/kubelet-key.pem --hosts 192.168.1.10 --remote-path /etc/kubernetes/ssl/
+  # Equivalent to: --remote-path /etc/kubernetes/ssl/kubelet.pem and /etc/kubernetes/ssl/kubelet-key.pem
   
   # Copy directory recursively to groups
   ks scp ./config-dir --groups web-servers --remote-path /etc/myapp --recursive
   
-  # Copy directory to target directory (auto-append source dir name)
-  ks scp ./deploy --hosts 192.168.1.10 --remote-path /opt/
-  # Equivalent to: --remote-path /opt/deploy
+  # Copy multiple directories to target directory (auto-append source dir name)
+  ks scp ./deploy ./scripts --hosts 192.168.1.10 --remote-path /opt/
+  # Equivalent to: --remote-path /opt/deploy and /opt/scripts
   
   # Copy to individual hosts with explicit path
   ks scp config.conf --hosts 192.168.1.10,192.168.1.11 --user root --pass password123 --remote-path /etc/config.conf
   
   # Mix of groups and individual hosts
   ks scp deploy.sh --groups web-servers --hosts 192.168.1.20 --user admin --pass secret --remote-path /tmp/deploy.sh`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			localPath := args[0]
+			localPaths := args
 
 			var allHosts []config.Host
 
@@ -97,8 +97,8 @@ Examples:
 				return fmt.Errorf("no hosts specified: use --groups or --hosts")
 			}
 
-			// Copy file/directory to all hosts
-			return copyPathToHosts(allHosts, localPath, remotePath, recursive)
+			// Copy all files/directories to all hosts
+			return copyPathsToHosts(allHosts, localPaths, remotePath, recursive)
 		},
 	}
 
@@ -115,28 +115,35 @@ Examples:
 	return scpCmd
 }
 
-// copyPathToHosts copies a file or directory to multiple hosts
-func copyPathToHosts(hosts []config.Host, localPath, remotePath string, recursive bool) error {
+// copyPathsToHosts copies one or more files or directories to multiple hosts
+func copyPathsToHosts(hosts []config.Host, localPaths []string, remotePath string, recursive bool) error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	errors := make([]string, 0)
 
-	klog.Infof("Copying %s to %d hosts", localPath, len(hosts))
+	klog.Infof("Copying %d files/directories to %d hosts", len(localPaths), len(hosts))
 
-	for _, host := range hosts {
-		wg.Add(1)
-		go func(h config.Host) {
-			defer wg.Done()
+	// For each local path, copy it to all hosts
+	for _, localPath := range localPaths {
+		klog.Infof("Copying %s to %d hosts", localPath, len(hosts))
+		
+		// Copy this local path to all hosts
+		for _, host := range hosts {
+			wg.Add(1)
+			go func(h config.Host, path string) {
+				defer wg.Done()
 
-			if err := copyPathToHost(h, localPath, remotePath, recursive); err != nil {
-				mu.Lock()
-				errors = append(errors, fmt.Sprintf("Host %s: %v", h.IP, err))
-				mu.Unlock()
-			}
-		}(host)
+				if err := copyPathToHost(h, path, remotePath, recursive); err != nil {
+					mu.Lock()
+					errors = append(errors, fmt.Sprintf("Host %s, path %s: %v", h.IP, path, err))
+					mu.Unlock()
+				}
+			}(host, localPath)
+		}
+		
+		// Wait for all hosts to finish copying this path before moving to the next
+		wg.Wait()
 	}
-
-	wg.Wait()
 
 	if len(errors) > 0 {
 		return fmt.Errorf("copy failed on some hosts:\n%s", strings.Join(errors, "\n"))
